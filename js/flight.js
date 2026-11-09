@@ -121,6 +121,7 @@ export class Flight {
     this.hud = el('div', 'ftop panel', '', ui);
     this.hudL = el('div', 'hcol', '', this.hud); this.hudR = el('div', 'hcol', '', this.hud);
     this.nodeHud = el('div', 'nodehud panel hidden', '', ui);
+    this.nodeHud.addEventListener('pointerdown', e => { e.stopPropagation(); this.nodePanelHidden = !this.nodePanelHidden; });
     this.stageBox = el('div', 'stagebox panel scrolly', '', ui);
     this.toastEl = el('div', 'toast hidden', '', ui);
     // bottom cluster
@@ -758,14 +759,14 @@ export class Flight {
       if (B.F > 0) { const ve = B.F / B.mdot; bt = this.mass * (1 - Math.exp(-Math.abs(dv) / ve)) / B.mdot; }
       const tt = this.node.t - this.t;
       this.nodeHud.classList.remove('hidden');
-      this.nodeHud.innerHTML = `◆ Node <b>T${tt >= 0 ? '−' : '+'}${fmtTime(Math.abs(tt))}</b> · Δv <b>${dv.toFixed(1)}</b> m/s · burn ${isFinite(bt) ? fmtTime(bt) : 'no thrust'}${isFinite(bt) && tt > 0 && tt < bt / 2 + 10 ? ' · <b class="warn">START BURN</b>' : ''}`;
+      this.nodeHud.innerHTML = `◆ Node ${this.map ? (this.nodePanelHidden ? '▸ ' : '▾ ') : ''}<b>T${tt >= 0 ? '−' : '+'}${fmtTime(Math.abs(tt))}</b> · Δv <b>${dv.toFixed(1)}</b> m/s · burn ${isFinite(bt) ? fmtTime(bt) : 'no thrust'}${isFinite(bt) && tt > 0 && tt < bt / 2 + 10 ? ' · <b class="warn">START BURN</b>' : ''}`;
       if (this.nodeVals) { this.nodeVals.pro.textContent = this.node.pro.toFixed(0); this.nodeVals.norm.textContent = this.node.norm.toFixed(0); this.nodeVals.rad.textContent = this.node.rad.toFixed(0); }
       const np = this.nodePatches; let info = '';
       if (np.length) { const e = np[0].el; info += `After burn: Ap ${e.ecc < 1 && np[0].end === 'closed' ? fmtDist(e.ra - np[0].body.radius) : '∞'} · Pe ${fmtDist(e.rp - np[0].body.radius)}`; }
       const enc = np.find((p, i) => i > 0 && p.body !== this.body);
       if (enc) info += `<br>→ ${enc.body.name}: Pe ${fmtDist(enc.el.rp - enc.body.radius)}${enc.end === 'impact' ? ' (impact!)' : ''}`;
       this.nodeInfo.innerHTML = info;
-      this.nodePanel.classList.toggle('hidden', !this.map);
+      this.nodePanel.classList.toggle('hidden', !this.map || !!this.nodePanelHidden);
     } else { this.nodeHud.classList.add('hidden'); this.nodePanel.classList.add('hidden'); }
     // navball
     const d = this.dirs(this.navFrame);

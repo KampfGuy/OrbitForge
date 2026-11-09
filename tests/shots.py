@@ -3,10 +3,14 @@ from playwright.async_api import async_playwright
 VIEWS = {'iphone-portrait': dict(viewport={'width':390,'height':844}, device_scale_factor=3, is_mobile=True, has_touch=True),
          'iphone-landscape': dict(viewport={'width':844,'height':390}, device_scale_factor=3, is_mobile=True, has_touch=True),
          'desktop': dict(viewport={'width':1440,'height':900}, device_scale_factor=1)}
-ONLY = sys.argv[1:] or list(VIEWS)
+ENGINE = 'chromium'
+args = sys.argv[1:]
+if args and args[0] == 'webkit': ENGINE = 'webkit'; args = args[1:]
+ONLY = args or list(VIEWS)
 async def run(p, name, kw, errs):
-    b = await p.chromium.launch(args=['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader'])
-    pg = await b.new_page(**kw)
+    b = await (p.webkit.launch() if ENGINE == 'webkit' else p.chromium.launch(args=['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']))
+    if ENGINE == 'webkit': name = 'safari-' + name
+    pg = await (await b.new_context(**kw)).new_page()
     pg.on('pageerror', lambda e: errs.append(name+' PAGEERROR '+str(e)))
     pg.on('console', lambda m: errs.append(name+' '+m.type+' '+m.text) if m.type in ('error','warning') else None)
     await pg.goto('http://localhost:8765/'); await pg.wait_for_timeout(2500)
@@ -17,9 +21,9 @@ async def run(p, name, kw, errs):
     await shot('2-builder')
     await pg.evaluate("import('./js/craft.js').then(c=>OF.startFlight(c.clone(c.EXAMPLES[1])))"); await pg.wait_for_timeout(1500)
     await shot('3-pad')
-    await pg.evaluate("(()=>{const D=OF.flight.debug; D.throttle(1); D.stage(); D.point(90,90); D.simulate(7);})()"); await pg.wait_for_timeout(1200)
+    await pg.evaluate("(()=>{const D=OF.flight.debug; D.throttle(1); D.stage(); D.point(90,90); D.simulate(7); OF.flight.camState.dist=40; OF.flight.camState.pitch=-0.15;})()"); await pg.wait_for_timeout(1200)
     await shot('4-launch')
-    await pg.evaluate("(()=>{const D=OF.flight.debug; D.simulate(14);})()"); await pg.wait_for_timeout(1200)
+    await pg.evaluate("(()=>{const D=OF.flight.debug; D.point(80,90); D.simulate(14); OF.flight.camState.dist=45; OF.flight.camState.pitch=0.1;})()"); await pg.wait_for_timeout(1200)
     await shot('4b-ascent')
     r = await pg.evaluate(open('tests/ascent.js').read(), {'lead':30})
     await pg.evaluate("OF.flight.camState.pitch=0.35; OF.flight.camState.dist=22"); await pg.wait_for_timeout(1500)

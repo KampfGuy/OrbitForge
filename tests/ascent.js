@@ -2,7 +2,7 @@
 async (opts) => {
   const F = OF.flight, D = F.debug, log = [];
   const st = () => D.status();
-  D.throttle(1); D.stage();
+  D.throttle(1); if (F.prop.next === 0) D.stage();
   let phase = 'ascent', t0 = performance.now();
   for (let i = 0; i < 4000; i++) {
     const s = st();
