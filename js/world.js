@@ -100,8 +100,8 @@ gl_FragColor = vec4(vec3(0.35,0.6,1.0)*pow(rim,2.5)*1.3*lit, 1.0); }`,
     const box = (w, h, d, m, x, y, z) => { const me = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); me.position.set(x, y, z); g.add(me); return me; };
     box(30, 4, 30, conc, 0, -2, 0);               // pad (top at local y=0)
     box(10, 0.1, 10, dark, 0, 0.05, 0);
-    box(1.6, 34, 1.6, stripe, 0, 15, 10);            // service tower (west of pad)
-    box(1.0, 0.5, 6, stripe, 0, 24, 7);
+    box(1.6, 34, 1.6, stripe, -5, 15, 11);           // service tower (behind the rocket from the default camera)
+    box(1.0, 0.5, 7, stripe, -4.2, 24, 7.5);
     box(60, 0.2, 8, dark, 50, 0.1, 0);              // road
     box(40, 26, 30, wall, 110, 13, -30);           // assembly hall
     box(30, 10, 20, wall, 110, 5, 40);
