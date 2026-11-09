@@ -53,7 +53,7 @@ export class Flight {
     this.throttle = 0; this.sas = false; this.sasMode = 'stab'; this.holdQ = null;
     this.warpIdx = 0; this.warpMode = 'phys'; this.acc = 0;
     this.map = false; this.mapFocus = null; this.node = null; this.patches = []; this.nodePatches = []; this.predTimer = 0;
-    this.camState = { yaw: 0.75, pitch: 0.12, dist: 30, mapYaw: 0.6, mapPitch: 0.9, mapDist: 4e6 };
+    this.camState = { yaw: 1.85, pitch: 0.12, dist: 30, mapYaw: 0.6, mapPitch: 0.9, mapDist: 4e6 };
     this.navMode = 'auto';
     this.stats = { maxAlt: 0, maxSpeed: 0, visited: new Set(['Kampa']) };
     this.contact = true; this.contactT = 1; this.landed = true;
