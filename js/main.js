@@ -81,11 +81,10 @@ class App {
       <div class="mrow"><button data-a="quick" class="mb">Quick launch<small>Forge-1 Orbiter</small></button>
       <button data-a="quicks" class="mb">Shuttle launch<small>Albatross</small></button>
       <button data-a="quickp" class="mb">Quick takeoff<small>Kestrel Jet</small></button></div>
-      <div class="mrow"><button data-a="help" class="mb">❓ How to Fly</button><button data-a="mods" class="mb">🧩 Mods<small>${MODS.loaded.length ? MODS.loaded.length + ' loaded' : 'add parts & worlds'}</small></button></div>
-      <div class="mrow"><button data-a="controls" class="mb">🎮 Controls & sound</button><button data-a="settings" class="mb">⚙ Graphics: <span id="qlab"></span></button></div>
+      <div class="mgrid"><button data-a="help" class="mb sm">❓ How to Fly</button><button data-a="mods" class="mb sm">🧩 Mods<small>${MODS.loaded.length ? MODS.loaded.length + ' loaded' : 'parts & worlds'}</small></button>
+      <button data-a="controls" class="mb sm">🎮 Controls<small>& sound</small></button><button data-a="settings" class="mb sm">⚙ Graphics<small id="qlab"></small></button>
+      <button data-a="qload" class="mb sm">⏏ Quickload</button><button data-a="credits" class="mb sm">✨ Credits</button></div>
       <div class="mrow modbtns"></div>
-      <button data-a="qload" class="mb">⏏ Load quicksave</button>
-      <button data-a="credits" class="mb">✨ Credits</button>
       <p class="by">By: Kampfguy</p></div>`;
     document.getElementById('qlab').textContent = this.quality;
     const mb = m.querySelector('.modbtns');

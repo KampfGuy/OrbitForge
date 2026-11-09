@@ -236,3 +236,15 @@ body.portrait .sascol .sb.brk { display: none; }
 .dcard h3 { margin: 10px 0 2px; font-size: 13px; letter-spacing: 1px; opacity: 0.85; text-align: left; }
 .modpanel { position: absolute; z-index: 3; pointer-events: none; }
 .cjson{width:100%;box-sizing:border-box;font:11px/1.35 ui-monospace,Menlo,monospace;background:#0b1220;color:#cfe3ff;border:1px solid #2a3a55;border-radius:8px;padding:6px;resize:vertical;max-height:30vh}
+.mgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; }
+.mb.sm { margin: 0; padding: 9px 6px; font-size: 14px; }
+.mb.sm small { font-size: 10px; }
+@media (orientation: landscape) and (max-height: 520px) {
+  .mcard { width: min(700px, 100%); padding: 10px 16px; }
+  .mcard h1 { font-size: 30px; margin: 0; }
+  .mcard .tag { margin: 0 0 4px; font-size: 13px; }
+  .mcard .mb { margin: 5px 0; padding: 8px 10px; font-size: 15px; }
+  .mcard .mb.sm { margin: 0; padding: 7px 4px; font-size: 13px; }
+  .mgrid { grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 5px 0; }
+  .mcard .by { margin-top: 4px; font-size: 12px; }
+}

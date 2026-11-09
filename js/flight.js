@@ -263,7 +263,7 @@ export class Flight {
   setHudOpen(on) { if (on && this.stagesOpen && this.app.W < 900) this.setStagesOpen(false); this.hudOpen = on; this.hud.classList.toggle('open', on); this.ui.classList.toggle('hudopen', on); clearTimeout(this._hudT); if (on && this.app.W < 900) this._hudT = setTimeout(() => this.setHudOpen(false), 6000); }
   setStagesOpen(on) { if (on && this.hudOpen && this.app.W < 900) this.setHudOpen(false); this.stagesOpen = on; this.stageBox.classList.toggle('hidden', !on); this.stageChip.classList.toggle('open', on); this.refreshStages(); clearTimeout(this._stT); if (on) this._stT = setTimeout(() => this.setStagesOpen(false), 6000); }
   toggleGear() { if (!this.gears.length && this.legs.length) return this.toggleLegs(); this.gearDown = !this.gearDown; this.toast(this.gearDown ? 'Gear down' : 'Gear up', 1000); AUDIO.click(); }
-  togglePop(p) { const open = p.classList.contains('hidden'); this.sasPop.classList.add('hidden'); this.actPop.classList.add('hidden'); if (open) { p.classList.remove('hidden'); clearTimeout(this._popT); this._popT = setTimeout(() => p.classList.add('hidden'), 9000); } }
+  togglePop(p) { const open = p.classList.contains('hidden'); this.sasPop.classList.add('hidden'); this.actPop.classList.add('hidden'); if (open) { p.classList.remove('hidden'); this.toastEl.classList.add('hidden'); clearTimeout(this._popT); this._popT = setTimeout(() => p.classList.add('hidden'), 9000); } }
   closePops() { this.sasPop.classList.add('hidden'); this.actPop.classList.add('hidden'); }
   // ◎ popover: SAS modes + autopilot + precision; ⋯ popover: craft actions
   buildPopovers() {
