@@ -20,7 +20,38 @@
 <div id="ui"></div>
 <div id="menu" class="screen"></div>
 <div id="dialog" class="hidden"></div>
-<div id="boot"><div class="spin"></div><p>Loading Orbit Forge…</p><noscript>JavaScript is required.</noscript></div>
+<div id="boot"><div class="art"></div><div class="art"></div><div class="shade"></div>
+<div class="ltitle">ORBIT<span>FORGE</span></div><div class="lby">By: Kampfguy</div>
+<div class="lbot"><div class="ltip">Loading…</div><div class="lbar"><div class="lfill"></div></div><div class="lstep">Starting up</div></div>
+<noscript><p style="position:absolute;top:40%;width:100%;text-align:center">JavaScript is required.</p></noscript></div>
+<script>
+(function () {
+  var b = document.getElementById('boot'), arts = b.querySelectorAll('.art'), tipEl = b.querySelector('.ltip'), fill = b.querySelector('.lfill'), step = b.querySelector('.lstep');
+  var imgs = ['art/load1.jpg', 'art/load2.jpg', 'art/load3.jpg', 'art/load4.jpg', 'art/load5.jpg'];
+  var tips = ['Calibrating the fuel-to-optimism ratio…', 'Negotiating with gravity (it is not budging)…', 'Patching the conics…', 'Sweeping bolts off the runway…', 'Folding wings in the Hangar…',
+    'Convincing Lumo to stay in orbit…', 'Teaching the parachutes to be patient…', 'Counting to ten, then backwards…', 'Polishing the navball…', 'Reminding pilots that up is the blue half…',
+    'Adding more struts to the struts…', 'Pointing everything vaguely east…', 'Inflating the atmosphere…', 'Warming up the reaction wheels…', 'Checking the snack locker (critical)…',
+    'Asking Pip to hold still…', 'Re-reading the staging list. Again.', 'Polishing the shock cones…'];
+  for (var i = tips.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), t = tips[i]; tips[i] = tips[j]; tips[j] = t; }
+  var k = Math.floor(Math.random() * imgs.length), ti = 0, cur = 0, shown = performance.now(), prog = 0, target = 0.05, done = null, iv, tv;
+  function showArt() { var a = arts[cur]; a.style.backgroundImage = 'url(' + imgs[k % imgs.length] + ')'; a.classList.add('on'); arts[1 - cur].classList.remove('on'); cur = 1 - cur; k++; var pre = new Image(); pre.src = imgs[k % imgs.length]; }
+  function showTip() { tipEl.style.opacity = 0; setTimeout(function () { tipEl.textContent = tips[ti++ % tips.length]; tipEl.style.opacity = 1; }, 300); }
+  showArt(); showTip();
+  iv = setInterval(showArt, 3600); tv = setInterval(showTip, 2200);
+  // creep toward the target while the modules download
+  var cr = setInterval(function () { if (target < 0.6) target = Math.min(0.6, target + 0.02); prog += (target - prog) * 0.25; fill.style.width = (prog * 100).toFixed(1) + '%'; }, 120);
+  window.__loader = {
+    set: function (p, s) { target = Math.max(target, p); if (s) step.textContent = s; },
+    done: function (cb) {
+      var wait = Math.max(0, 3200 - (performance.now() - shown));
+      setTimeout(function () { target = 1; prog = 1; fill.style.width = '100%'; step.textContent = 'Ready!';
+        setTimeout(function () { b.classList.add('out'); clearInterval(iv); clearInterval(tv); clearInterval(cr);
+          setTimeout(function () { b.remove(); window.__loader = null; if (cb) cb(); }, 650); }, 250); }, wait);
+    }
+  };
+  window.addEventListener('error', function (e) { step.textContent = 'Error: ' + (e.message || 'failed to load'); });
+})();
+</script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

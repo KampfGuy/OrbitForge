@@ -1,5 +1,5 @@
 // Orbit Forge service worker: network-first, falls back to cache for offline play
-const CACHE = 'orbitforge-v1';
+const CACHE = 'orbitforge-v2';
 self.addEventListener('install', e => { self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
 self.addEventListener('fetch', e => {

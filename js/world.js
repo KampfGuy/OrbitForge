@@ -107,7 +107,37 @@ gl_FragColor = vec4(vec3(0.35,0.6,1.0)*pow(rim,2.5)*1.3*lit, 1.0); }`,
     box(30, 10, 20, wall, 110, 5, 40);
     box(6, 40, 6, wall, 160, 20, 10);               // control tower
     box(10, 4, 10, new THREE.MeshLambertMaterial({ color: 0x4a7fbf, emissive: 0x0a1a30 }), 160, 41, 10);
-    box(700, 0.15, 40, dark, 0, 0.08, 400);         // runway
+    // runway: E-W along site-local Z at x = 700 m, curved to follow the planet
+    const R = this.body.radius, sy = (x, z) => Math.sqrt(R * R - x * x - z * z) - R;
+    {
+      const RW = { x: 700, z0: 1180, z1: -1180, w: 40 }, NZ = 96, pos = [], uv = [], idx = [];
+      for (let j = 0; j <= NZ; j++) for (let i = 0; i <= 1; i++) {
+        const z = RW.z0 + (RW.z1 - RW.z0) * j / NZ, x = RW.x + (i - 0.5) * RW.w;
+        pos.push(x, sy(x, z) + 0.03, z); uv.push(i, j / NZ * 40);
+      }
+      for (let j = 0; j < NZ; j++) { const a = j * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); geo.setIndex(idx); geo.computeVertexNormals();
+      const cv = document.createElement('canvas'); cv.width = 64; cv.height = 256; const c = cv.getContext('2d');
+      c.fillStyle = '#3d4046'; c.fillRect(0, 0, 64, 256); c.fillStyle = '#e8e8e8'; c.fillRect(30, 20, 4, 110); c.fillRect(1, 0, 3, 256); c.fillRect(60, 0, 3, 256);
+      const tex = new THREE.CanvasTexture(cv); tex.wrapT = THREE.RepeatWrapping; tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+      const rw = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: tex })); g.add(rw);
+      // threshold markings + edge lights
+      const wht = new THREE.MeshBasicMaterial({ color: 0xf2f2f2 }), lit = new THREE.MeshBasicMaterial({ color: 0xffd070 });
+      for (const zz of [RW.z0 - 15, RW.z1 + 15]) for (let k = -3; k <= 3; k++) box(2.2, 0.06, 24, wht, RW.x + k * 4.8, sy(RW.x, zz) + 0.05, zz);
+      for (let j = 0; j <= 24; j++) { const z = RW.z0 + (RW.z1 - RW.z0) * j / 24; for (const sd of [-1, 1]) box(0.5, 0.5, 0.5, lit, RW.x + sd * (RW.w / 2 + 2), sy(RW.x, z) + 0.25, z); }
+      // taxiway to the pad road
+      box(640, 0.3, 14, dark, 380, sy(380, 1000) - 0.05, 1000);
+    }
+    // spaceplane hangar (arched roof) beside the runway threshold
+    {
+      const hx = 600, hz = 1000, hy = sy(hx, hz);
+      const arch = new THREE.Mesh(new THREE.CylinderGeometry(22, 22, 70, 28, 1, false, 0, Math.PI), new THREE.MeshLambertMaterial({ color: 0xc8ccd2 }));
+      arch.rotation.z = Math.PI / 2; arch.position.set(hx, hy, hz); arch.scale.set(0.8, 1, 1); g.add(arch);
+      box(74, 4, 48, conc, hx, hy - 1.9, hz);
+      box(1, 15, 30, dark, hx + 35.2, hy + 7.5, hz);
+      box(1.2, 2.5, 34, stripe, hx + 35.6, hy + 16.3, hz);
+      box(30, 0.12, 18, dark, hx + 50, hy - 0.04, hz);
+    }
     g.position.copy(SITE).multiplyScalar(this.body.radius);
     g.quaternion.setFromUnitVectors(new V3(0, 1, 0), SITE);
     this.siteGroup = g;

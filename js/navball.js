@@ -16,9 +16,9 @@ function ballTexture() {
     const x = ((0.75 - hd / 360) % 1 + 1) % 1 * W;
     g.lineWidth = hd % 90 === 0 ? 3 : 1; g.beginPath(); g.moveTo(x, 10); g.lineTo(x, H - 10); g.stroke();
     const t = labels[hd] || (hd % 45 === 0 ? String(hd) : '');
-    if (t) for (const lat of [-30, 30]) { const y = H / 2 - lat / 180 * H; g.save(); g.fillStyle = labels[hd] ? '#ffe680' : '#fff'; g.fillText(t, x + 0, y); g.restore(); }
+    if (t) for (const lat of [-30, 30]) { const y = H / 2 - lat / 180 * H; g.save(); g.fillStyle = labels[hd] ? '#ffe680' : '#fff'; g.translate(x, y); g.scale(-1, 1); g.fillText(t, 0, 0); g.restore(); }
   }
-  for (const lat of [-60, -30, 30, 60]) { const y = H / 2 - lat / 180 * H; for (let k = 0; k < 4; k++) g.fillText(String(Math.abs(lat)), (k * 0.25 + 0.125) * W, y - 14); }
+  for (const lat of [-60, -30, 30, 60]) { const y = H / 2 - lat / 180 * H; for (let k = 0; k < 4; k++) { g.save(); g.translate((k * 0.25 + 0.125) * W, y - 14); g.scale(-1, 1); g.fillText(String(Math.abs(lat)), 0, 0); g.restore(); } }
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   return t;
 }
@@ -41,8 +41,8 @@ export class Navball {
   constructor() {
     this.scene = new THREE.Scene();
     this.cam = new THREE.PerspectiveCamera(30, 1, 0.1, 10); this.cam.position.set(0, 0, 4.0);
-    this.ball = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 24), new THREE.MeshBasicMaterial({ map: ballTexture() }));
-    this.scene.add(this.ball);
+    this.ball = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 24), new THREE.MeshBasicMaterial({ map: ballTexture(), side: THREE.DoubleSide }));
+    this.ball.matrixAutoUpdate = false; this.scene.add(this.ball);
     // bezel
     const bz = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.12, 48), new THREE.MeshBasicMaterial({ color: 0x2a2e36 }));
     bz.position.z = 0.6; bz.scale.setScalar(0.84); this.scene.add(bz);
@@ -58,12 +58,12 @@ export class Navball {
   }
   // q: vessel attitude (local->world), frame {up,east,north}; dirs: {pro, norm, radOut, node} world unit vectors (or null)
   update(q, frame, dirs) {
-    const right = new V3(1, 0, 0).applyQuaternion(q), dorsal = new V3(0, 0, -1).applyQuaternion(q), nose = new V3(0, 1, 0).applyQuaternion(q);
+    const right = new V3(-1, 0, 0).applyQuaternion(q), dorsal = new V3(0, 0, -1).applyQuaternion(q), nose = new V3(0, 1, 0).applyQuaternion(q);
     const E = frame.east, U = frame.up, Nn = frame.north;
     const row = v => [v.dot(E), v.dot(U), -v.dot(Nn)];
     const a = row(right), b = row(dorsal), c = row(nose);
     this._m.set(a[0], a[1], a[2], 0, b[0], b[1], b[2], 0, c[0], c[1], c[2], 0, 0, 0, 0, 1);
-    this.ball.quaternion.setFromRotationMatrix(this._m);
+    this.ball.matrix.copy(this._m); this.ball.matrixWorldNeedsUpdate = true;
     const place = (k, d) => {
       const s = this.markers[k];
       if (!d) { s.visible = false; return; }

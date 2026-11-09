@@ -23,9 +23,17 @@ async def main():
         print('GL', info)
         touch = True
         # Build from scratch: New, then Pod, tank, engine, chute
-        await pg.get_by_text('Build a Rocket').tap(); await pg.wait_for_timeout(800)
-        await pg.get_by_role('button', name='New').tap(); await pg.wait_for_timeout(400)
+        await pg.wait_for_function("!document.getElementById('boot')", timeout=20000)
+        await pg.evaluate("localStorage.setItem('orbitforge.rotateHint','off'); document.querySelectorAll('.rotate').forEach(e=>e.remove())")
+        await pg.locator('.mb', has_text='Forge').first.tap(); await pg.wait_for_timeout(800)
+        async def more(item):
+            await pg.get_by_title('More').tap(); await pg.wait_for_timeout(300)
+            await pg.locator('#dialog .mb', has_text=item).tap(); await pg.wait_for_timeout(400)
+        await more('New craft')
+        async def opendrawer():
+            if await pg.locator('.drawbtn').is_visible(): await pg.locator('.drawbtn').tap(); await pg.wait_for_timeout(350)
         async def add(cat, name, which):
+            await opendrawer()
             await pg.locator('.tab', has_text=cat).tap(); await pg.wait_for_timeout(200)
             await pg.locator('.pbtn', has_text=name).first.tap(); await pg.wait_for_timeout(300)
             ms = await marker_xy(pg)
@@ -40,12 +48,12 @@ async def main():
         await add('Engines', 'Hammer', 'bottom')
         await add('Utility', 'Canopy Chute', 'top')
         # radial: side splitter + booster (sym 2)
-        await pg.locator('.tab', has_text='Coupling').tap(); await pg.locator('.pbtn', has_text='Side Splitter').tap(); await pg.wait_for_timeout(300)
+        await opendrawer(); await pg.locator('.tab', has_text='Coupling').tap(); await pg.locator('.pbtn', has_text='Side Splitter').tap(); await pg.wait_for_timeout(400)
         ms = await marker_xy(pg); ms.sort(key=lambda m: m[2]); 
         # choose a marker at mid height of the tank (lowest one is on the engine-less tank)
         mid = [m for m in ms if 0 <= m[0] <= 390 and 120 <= m[1] <= 700]
         await tap(pg, mid[len(mid)//2][0], mid[len(mid)//2][1], touch); await pg.wait_for_timeout(400)
-        await pg.locator('.tab', has_text='Boosters').tap(); await pg.locator('.pbtn', has_text='Bolt').tap(); await pg.wait_for_timeout(300)
+        await opendrawer(); await pg.locator('.tab', has_text='Boosters').tap(); await pg.locator('.pbtn', has_text='Bolt').tap(); await pg.wait_for_timeout(400)
         ms = await marker_xy(pg)
         vis = [m for m in ms if 0 <= m[0] <= 390 and 80 <= m[1] <= 700 and m[3] > 0.8]
         print('booster markers', vis)
@@ -56,11 +64,11 @@ async def main():
         await pg.wait_for_timeout(300)
         await pg.screenshot(path=f'screenshots/{ENGINE}-built-from-scratch.png')
         # select + delete + undo
-        await pg.get_by_role('button', name='Undo').tap(); await pg.wait_for_timeout(300)
+        await pg.get_by_title('Undo').tap(); await pg.wait_for_timeout(300)
         n1 = await pg.evaluate("OF.builder.inst.length"); print('after undo parts', n1)
-        await pg.get_by_role('button', name='Undo').tap(); await pg.wait_for_timeout(300)
+        await pg.get_by_title('Undo').tap(); await pg.wait_for_timeout(300)
         # save
-        await pg.locator('.bname').fill('Test Rocket'); await pg.get_by_role('button', name='Save').tap()
+        await pg.locator('.bname').fill('Test Rocket'); await more('Save on this device')
         saved = await pg.evaluate("Object.keys(JSON.parse(localStorage.getItem('orbitforge.crafts')||'{}'))"); print('saved', saved)
         # Launch via real UI controls: slider + STAGE button
         await pg.get_by_role('button', name='LAUNCH ▶').tap(); await pg.wait_for_timeout(1200)
@@ -90,6 +98,46 @@ async def main():
         dlg = await pg.evaluate("document.querySelector('#dialog').innerText")
         print('crash test destroyed', r['destroyed'], 'dialog:', dlg.replace('\n',' | ')[:120])
         await pg.screenshot(path=f'screenshots/{ENGINE}-crash.png')
+        # ---- Hangar: build a small jet from scratch with taps, then take off with the on-screen controls ----
+        await pg.evaluate("OF.toBuilder('sph')"); await pg.wait_for_timeout(700)
+        await more('New craft')
+        async def addp(cat, name, choose):
+            await opendrawer()
+            await pg.locator('.tab', has_text=cat).tap(); await pg.wait_for_timeout(200)
+            await pg.locator('.pbtn', has_text=name).first.tap(); await pg.wait_for_timeout(300)
+            pts = await pg.evaluate("""()=>{const B=OF.builder; B.rig.updateMatrixWorld(true); return B.markerGroup.children.filter(m=>m.userData.point!==undefined).map(m=>{const w=m.getWorldPosition(new m.position.constructor()); const v=w.clone().project(B.camera); const pt=B.points[m.userData.point]; return {x:(v.x+1)/2*OF.W, y:(1-v.y)/2*OF.H, ly:pt.pos.y, lx:pt.pos.x, lz:pt.pos.z, i:m.userData.point};});}""")
+            if not pts: raise Exception('no markers for '+name)
+            m = choose(pts)
+            await tap(pg, m['x'], m['y'], touch); await pg.wait_for_timeout(400)
+            n = await pg.evaluate("OF.builder.inst.length"); print('hangar added', name, '-> parts', n)
+        await addp('Cockpits', 'Hawk Cockpit', lambda p: p[0])
+        await addp('Fuselage', 'Fuselage Tank L', lambda p: min(p, key=lambda m: m['ly']))
+        await addp('Air', 'Gust Turbojet', lambda p: min(p, key=lambda m: m['ly']))
+        # wings on the fuselage tank (stack index 1): pick the slot at t=0.15 (lowest y among those on the tank)
+        await addp('Wings', 'Delta Wing', lambda p: sorted([m for m in p if 2.0 < m['ly'] < 6.0], key=lambda m: m['ly'])[0])
+        await addp('Control', 'Rudder Tail', lambda p: sorted([m for m in p if m['lz'] < -0.3], key=lambda m: m['ly'])[0])
+        await addp('Air', 'Side Intake', lambda p: sorted(p, key=lambda m: -m['ly'])[1])
+        await addp('Control', 'Elevon', lambda p: sorted([m for m in p if abs(m['lz']) < 0.3], key=lambda m: m['ly'])[0])
+        await addp('Gear', 'Nose Gear', lambda p: sorted([m for m in p if abs(m['lx']) < 0.05 and m['lz'] > 0.3], key=lambda m: -m['ly'])[0])
+        await addp('Gear', 'Main Gear', lambda p: sorted([m for m in p if abs(m['lx']) > 0.1 and m['lz'] > 0.3 and 2.0 < m['ly'] < 6.5], key=lambda m: m['ly'])[0])
+        hs = await pg.evaluate("(()=>{const B=OF.builder; return {craft:B.craft, stats:B.statsEl.innerText, c:B._centers}})()")
+        print('HANGAR BUILT', json.dumps(hs['craft'])); print(hs['stats'].replace('\n',' | ')); print('centers', json.dumps(hs['c']))
+        await pg.evaluate("document.querySelector('.bstats').classList.remove('compact')"); await pg.wait_for_timeout(300)
+        await pg.screenshot(path=f'screenshots/{ENGINE}-hangar-built-from-scratch.png')
+        await pg.get_by_role('button', name='LAUNCH ▶').tap(); await pg.wait_for_timeout(1200)
+        await pg.locator('.stagebtn').tap(); await pg.wait_for_timeout(200)
+        await pg.locator('.thbtns .sb', has_text='MAX').tap(); await pg.wait_for_timeout(200)
+        await pg.locator('.sb.sas').tap(); await pg.wait_for_timeout(100)
+        t0 = await pg.evaluate("OF.flight.debug.simulate(14)")
+        jb = await pg.locator('.joy').bounding_box()
+        cx, cy = jb['x']+jb['width']/2, jb['y']+jb['height']/2
+        # hold the stick back (pull down) using a real pointer drag while the game runs
+        await pg.mouse.move(cx, cy); await pg.mouse.down(); await pg.mouse.move(cx, cy + jb['height']*0.28, steps=4)
+        r1 = await pg.evaluate("(()=>{const F=OF.flight; F.debug.simulate(6); return {joy:F.joyV, st:F.debug.status(), contact:F.contact}})()")
+        await pg.mouse.up()
+        r2 = await pg.evaluate("(()=>{const F=OF.flight; F.debug.simulate(8); const s=F.debug.status(); return {alt:s.alt, contact:F.contact, destroyed:s.destroyed}})()")
+        print('hangar jet: after roll', 'speed %.0f' % t0['speed'], '| stick back', r1['joy'], 'alt %.1f contact %s' % (r1['st']['alt'], r1['contact']), '| 8 s later', r2)
+        await pg.screenshot(path=f'screenshots/{ENGINE}-hangar-jet-flying.png')
         print('ERRORS', errs[:15])
         await b.close()
 asyncio.run(main())
