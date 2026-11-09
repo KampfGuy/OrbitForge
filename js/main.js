@@ -2,6 +2,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import { Builder } from './builder.js';
 import { Flight } from './flight.js';
+import { MODS } from './mods.js';
 
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 class App {
@@ -78,14 +79,24 @@ class App {
       <div class="mrow"><button data-a="build" class="mb go">🚀 Forge<small>build rockets</small></button>
       <button data-a="hangar" class="mb go">✈ Hangar<small>build spaceplanes</small></button></div>
       <div class="mrow"><button data-a="quick" class="mb">Quick launch<small>Forge-1 Orbiter</small></button>
+      <button data-a="quicks" class="mb">Shuttle launch<small>Albatross</small></button>
       <button data-a="quickp" class="mb">Quick takeoff<small>Kestrel Jet</small></button></div>
-      <button data-a="help" class="mb">❓ How to Fly</button>
-      <button data-a="settings" class="mb">⚙ Graphics: <span id="qlab"></span></button>
+      <div class="mrow"><button data-a="help" class="mb">❓ How to Fly</button><button data-a="mods" class="mb">🧩 Mods<small>${MODS.loaded.length ? MODS.loaded.length + ' loaded' : 'add parts & worlds'}</small></button></div>
+      <div class="mrow"><button data-a="controls" class="mb">🎮 Controls & sound</button><button data-a="settings" class="mb">⚙ Graphics: <span id="qlab"></span></button></div>
+      <div class="mrow modbtns"></div>
+      <button data-a="qload" class="mb">⏏ Load quicksave</button>
       <button data-a="credits" class="mb">✨ Credits</button>
       <p class="by">By: Kampfguy</p></div>`;
     document.getElementById('qlab').textContent = this.quality;
+    const mb = m.querySelector('.modbtns');
+    for (const b of MODS.buttons('menu')) { const x = document.createElement('button'); x.className = 'mb'; x.innerHTML = (b.icon || '🧩') + ' ' + b.label; x.addEventListener('click', () => MODS.safe(b.mod, () => b.onClick(null))); mb.appendChild(x); }
+    if (!mb.children.length) mb.remove();
     m.addEventListener('click', e => {
       const a = e.target.closest('button')?.dataset.a; if (!a) return;
+      if (a === 'quicks') { import('./craft.js').then(c => this.startFlight(c.clone(c.EXAMPLES.find(x => x.kind === 'shuttle')))); }
+      if (a === 'mods') MODS.menu(this);
+      if (a === 'controls') this.flight.settings();
+      if (a === 'qload') this.flight.quickload();
       if (a === 'build') this.toBuilder('vab');
       if (a === 'hangar') this.toBuilder('sph');
       if (a === 'quickp') { import('./craft.js').then(c => this.startFlight(c.clone(c.PLANE_EXAMPLES[0]))); }
@@ -97,7 +108,10 @@ class App {
         <p><b>Launch:</b> throttle to max (slider / Shift / Z), press STAGE (Space). Turn SAS on (T).</p>
         <p><b>Gravity turn:</b> at ~250 m/s (≈ 8 km) tilt east (D key / joystick right) to ~45° by 15 km, then lower. Aim for Ap 80 km, cut throttle, coast, and burn prograde at Ap to circularise.</p>
         <p><b>Map (M):</b> tap your orbit line or press + Node to make a maneuver node. Use the panel to add prograde/normal/radial Δv. Point SAS at ◆ and burn when the timer says.</p>
-        <p><b>Keys:</b> W/S pitch · A/D yaw · Q/E roll · Shift/Ctrl throttle · Z max · X cut · Space stage · T SAS · M map · , . warp · Esc menu</p>
+        <p><b>Steering:</b> the joystick asks for a turn rate; let go and the craft stops turning (Steering assist). With SAS on it then holds that attitude. Rockets: stick = pitch + yaw, ⟲ ⟳ = roll. Planes: stick = pitch + roll, ◁ ▷ = yaw. 🎯 Fine (Caps Lock) gives gentle precision control. Sensitivity and tilt-to-steer are in 🎮 Controls.</p>
+        <p><b>Autopilot (◎):</b> 🚀 Ascent flies a gravity turn to orbit and stages for you. Winged craft also get ✈ heading + altitude hold, ☄ reentry (nose high, wings level) and 🛬 auto-land on the runway.</p>
+        <p><b>Keys:</b> W/S pitch · A/D yaw · Q/E roll · Caps Lock fine · Shift/Ctrl throttle · Z max · X cut · Space stage · T SAS · R RCS · H/N J/L I/K RCS translate · G gear/legs · O bay · F5/F9 quicksave/load · M map · , . warp · Esc menu</p>
+        <p><b>Shuttles:</b> orbiter on a Grand External Tank (Side Splitter ×1 on the belly) with Pillar boosters splittered beside the tank. The Triad engines gimbal to cancel the off-centre thrust. Boosters drop first, then the tank; the orbiter keeps a little fuel for its orbit and deorbit burns, then glides home. Keep the nose high on reentry: the orbiter has heat tiles, most other parts do not.</p>
         <p><b>Planes (Hangar):</b> cockpit at the front, wings mirrored, main gear just behind the yellow CoM, blue CoL behind it. On the runway: STAGE starts the jet, full throttle, hold the stick down (S) at ~70 m/s to rotate. G = gear, B = brakes. The stick banks the plane in the air and steers it on the ground.</p>
         <p><b>Spaceplanes:</b> the Twinmode Hybrid breathes air up to about 25 km and Mach 5, then switches to rocket mode on its own.</p>
         <p><b>Landing:</b> stage the parachute before 20 km on the way down; touch down under ${11} m/s. Recover on Kampa.</p></div>`);
@@ -165,6 +179,7 @@ class App {
     document.addEventListener('visibilitychange', () => { this.last = performance.now(); });
   }
 }
+try { await MODS.init(); } catch (e) { console.warn('mods failed to load', e); }
 window.OF = new App();
 window.OF.show('menu');
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => { });

@@ -1,0 +1,100 @@
+{
+  "id": "forge-extras",
+  "name": "Forge Extras Parts Pack",
+  "version": "1.0",
+  "author": "Kampfguy",
+  "api": 1,
+  "description": "Three extra parts: a stubby tank, the Viper engine and an ogive nose cone.",
+  "parts": {
+    "x_stubby": {
+      "name": "Stubby Tank",
+      "cat": "Tanks",
+      "h": 0.9,
+      "r": 1.25,
+      "mass": 2.2,
+      "dry": 0.28,
+      "desc": "Short, fat 2.5 m tank for compact landers",
+      "mesh": {
+        "shape": "tank",
+        "color": "#d8d2c4",
+        "accent": "#3a6ea5"
+      }
+    },
+    "x_viper": {
+      "name": "Viper Engine",
+      "cat": "Engines",
+      "h": 1.3,
+      "r": 0.625,
+      "mass": 0.9,
+      "thrust": 120,
+      "ispV": 330,
+      "ispA": 265,
+      "gimbal": 4,
+      "desc": "Punchy 1.25 m upper-stage engine",
+      "mesh": {
+        "shape": "engine",
+        "color": "#b7bcc4",
+        "accent": "#7a2b2b"
+      }
+    },
+    "x_ogive": {
+      "name": "Ogive Nose Cone",
+      "cat": "Aero",
+      "h": 1.6,
+      "r": 0.625,
+      "mass": 0.04,
+      "nose": true,
+      "desc": "Long pointy nose, less drag",
+      "mesh": {
+        "shape": "nose",
+        "color": "#f2f2f2"
+      }
+    }
+  },
+  "crafts": [
+    {
+      "name": "Viper Two-Stage",
+      "stack": [
+        {
+          "p": "chute"
+        },
+        {
+          "p": "pod1"
+        },
+        {
+          "p": "dec1"
+        },
+        {
+          "p": "t400"
+        },
+        {
+          "p": "x_viper"
+        },
+        {
+          "p": "dec1"
+        },
+        {
+          "p": "t400"
+        },
+        {
+          "p": "t400",
+          "radial": [
+            {
+              "sym": 3,
+              "ang": 0,
+              "items": [
+                "fin"
+              ]
+            }
+          ]
+        },
+        {
+          "p": "e_hammer"
+        }
+      ]
+    }
+  ],
+  "tips": [
+    "Bolting on third-party Viper engines…"
+  ]
+}

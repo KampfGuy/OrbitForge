@@ -1,7 +1,7 @@
 // Orbit Forge - 3D craft editors: the Forge (vertical rocket assembly) and the Hangar (horizontal spaceplane assembly)
 import * as THREE from './vendor/three.module.min.js';
 import { PARTS, CATS, PLANE_CATS, makePartMesh } from './parts.js';
-import { layout, buildEvents, stageStats, eventLabel, craftMass, sideItems, centers, EXAMPLES, PLANE_EXAMPLES, savedCrafts, saveCraft, deleteCraft, clone } from './craft.js';
+import { layout, buildEvents, stageStats, eventLabel, craftMass, sideItems, centers, EXAMPLES, PLANE_EXAMPLES, savedCrafts, saveCraft, deleteCraft, clone, missingParts } from './craft.js';
 import { HOME, clamp } from './orbit.js';
 const V3 = THREE.Vector3, TAU = Math.PI * 2, H = Math.PI / 2;
 function el(tag, cls, html, parent) { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; if (parent) parent.appendChild(e); return e; }
@@ -54,7 +54,7 @@ export class Builder {
     this.rebuild(true);
   }
   get plane() { return this.mode === 'sph'; }
-  loadCurrent(m) { try { return JSON.parse(localStorage.getItem(CUR[m])); } catch (e) { return null; } }
+  loadCurrent(m) { try { const c = JSON.parse(localStorage.getItem(CUR[m])); return c && missingParts(c).length ? null : c; } catch (e) { return null; } }
   setMode(m) {
     if (m === this.mode && this.craft) return;
     this.persist();
@@ -75,8 +75,8 @@ export class Builder {
     btn('☰', () => this.app.toMenu(), 'ic');
     this.modeLab = el('span', 'bmode', 'FORGE', top);
     this.nameIn = el('input', 'bname', '', top); this.nameIn.maxLength = 28; this.nameIn.addEventListener('input', () => { this.craft.name = this.nameIn.value; this.persist(); });
-    this.symBtn = btn('×2', () => { const o = [1, 2, 3, 4, 6]; this.sym = o[(o.indexOf(this.sym) + 1) % o.length]; this.symBtn.textContent = '×' + this.sym; this.updateMarkers(); this.hint('Radial symmetry ×' + this.sym); }, 'ic vabonly');
-    this.symBtn.title = 'Symmetry';
+    this.symBtn = btn('×2', () => { const o = [1, 2, 3, 4, 6]; this.sym = o[(o.indexOf(this.sym) + 1) % o.length]; this.symBtn.textContent = '×' + this.sym; this.updateMarkers(); this.hint('Radial symmetry ×' + this.sym); }, 'ic');
+    this.symBtn.title = 'Symmetry (splitters, legs, RCS; wings and gear are always mirrored in pairs)';
     btn('↶', () => this.undo(), 'ic').title = 'Undo';
     btn('⋯', () => this.moreMenu(), 'ic').title = 'More';
     btn('LAUNCH ▶', () => this.launch(), 'go');
@@ -103,11 +103,23 @@ export class Builder {
       ['New craft', () => { this.push(); this.craft = { name: this.plane ? 'Untitled Plane' : 'Untitled Rocket', kind: this.plane ? 'plane' : undefined, stack: [] }; this.sel = null; this.rebuild(true); this.setDrawer(true); }],
       ['Load…', () => this.loadDialog()],
       ['Save on this device', () => { saveCraft(clone(this.craft)); this.hint('Saved "' + this.craft.name + '" on this device'); }],
+      [`Launch site: ${this.site() === 'pad' ? '🚀 Pad' : '✈ Runway'} (tap to switch)`, () => { this.push(); this.craft.site = this.site() === 'pad' ? 'runway' : 'pad'; this.persist(); this.hint('This craft now launches from the ' + this.craft.site); }],
+      ['📋 Craft as JSON (copy / paste)…', () => this.jsonDialog()],
       [(this.showCenters ? 'Hide' : 'Show') + ' CoM / CoL / CoT markers', () => { this.showCenters = !this.showCenters; localStorage.setItem('orbitforge.centers', this.showCenters ? '1' : '0'); this.updateCenters(); }],
       [other === 'sph' ? '✈ Go to the Hangar (planes)' : '🚀 Go to the Forge (rockets)', () => this.setMode(other)],
       ['Cancel', () => { }],
     ], '<p class="legend"><span style="color:#ffd23a">● CoM</span> centre of mass · <span style="color:#3aa8ff">● CoL</span> centre of lift · <span style="color:#ff4fd8">● CoT</span> centre of thrust</p>');
   }
+  jsonDialog() {
+    const txt = JSON.stringify(this.craft);
+    this.app.dialog('Craft JSON', [
+      ['Copy', () => { try { navigator.clipboard.writeText(txt).then(() => this.hint('Copied - paste it into a mod\'s "crafts" list or share it'), () => this.hint('Select the text and copy it')); } catch (e) { this.hint('Select the text and copy it'); } }],
+      ['Load pasted JSON', () => { const v = (document.querySelector('#dialog textarea') || {}).value; try { const c = JSON.parse(v); if (!c || !Array.isArray(c.stack) || !c.stack.length) throw new Error('no "stack" list'); const miss = missingParts(c); if (miss.length) throw new Error('unknown parts: ' + miss.join(', ')); this.push(); this.craft = c; this.sel = null; this.rebuild(true); this.hint('Loaded "' + (c.name || 'craft') + '"'); } catch (e) { this.hint('Could not load: ' + e.message); } }],
+      ['Close', () => { }],
+    ], '<textarea class="cjson" spellcheck="false" rows="6"></textarea><p class="small">Copy this to share the craft or put it in a mod. To load one, replace the text and tap <b>Load pasted JSON</b>.</p>');
+    const ta = document.querySelector('#dialog textarea'); if (ta) { ta.value = txt; ta.addEventListener('click', e => e.stopPropagation()); ta.addEventListener('pointerdown', e => e.stopPropagation()); }
+  }
+  site() { return this.craft.site || (this.plane ? 'runway' : 'pad'); }
   renderTabs() {
     this.tabs.innerHTML = '';
     const cats = this.plane ? PLANE_CATS : CATS;
@@ -118,7 +130,6 @@ export class Builder {
     this.plist.innerHTML = '';
     for (const [id, p] of Object.entries(PARTS)) {
       if (p.cat !== this.cat) continue;
-      if (!this.plane && p.plane) continue;
       let info = `${p.mass.toFixed(2)} t`;
       if (p.air === 'jet') info += ` · ${p.thrust} kN (air)`;
       else if (p.air === 'hybrid') info += ` · ${p.airThrust} kN air / ${p.thrust} kN rocket`;
@@ -136,7 +147,7 @@ export class Builder {
   undo() { if (!this.history.length) { this.hint('Nothing to undo'); return; } this.craft = JSON.parse(this.history.pop()); this.sel = null; this.rebuild(); }
   persist() { try { if (this.craft) localStorage.setItem(CUR[this.mode], JSON.stringify(this.craft)); } catch (e) { } }
   rebuild(frame) {
-    if (this.plane) this.craft.kind = 'plane';
+    if (this.plane && this.craft.kind !== 'shuttle') this.craft.kind = 'plane';
     this.nameIn.value = this.craft.name || '';
     this.persist();
     const g = this.craftGroup;
@@ -223,6 +234,24 @@ export class Builder {
       }
     } else if (id === 'rdec') {
       for (const p of stackInst) { if (p.def.r < 0.4) continue; for (const a of angs) { const d = new V3(Math.cos(a), 0, Math.sin(a)); pts.push({ pos: d.multiplyScalar(p.def.r + 0.25).setY(p.top - Math.min(p.def.h, 1.6) / 2), act: addGroup(p, { sym: this.sym, ang: a, items: ['rdec'] }) }); } }
+      // pair of splitters beside a big side stack (boosters on an external tank)
+      for (const q of this.inst) {
+        if (q.kind !== 'side' || q.sym !== 0) continue;
+        const gr = c.stack[q.si].radial[q.gi]; if ((gr.sym || 1) !== 1) continue;
+        const side = this.inst.filter(x => x.kind === 'side' && x.si === q.si && x.gi === q.gi && x.sym === 0); if (q !== side[0]) continue;
+        const rs = side.reduce((m, x) => Math.max(m, x.def.r), 0); if (rs < 0.9) continue;
+        const a0 = q.ang, perp = new V3(-Math.sin(a0), 0, Math.cos(a0)), cen = new V3(q.pos.x, 0, q.pos.z);
+        const yy = Math.max(...side.map(x => x.top)) - 3;
+        const mk = sg => cen.clone().addScaledVector(perp, sg * (rs + 0.85 + 0.15));
+        const host = stackInst.find(x => x.si === q.si);
+        if (Math.abs(Math.cos(a0)) < 0.1) {
+          const cc = mk(1); const ang = Math.atan2(cc.z, cc.x), dist = Math.hypot(cc.x, cc.z);
+          for (const sg of [1, -1]) pts.push({ pos: cen.clone().addScaledVector(perp, sg * (rs + 0.3)).setY(yy), act: addGroup(host, { sym: 2, mirror: true, ang: +ang.toFixed(4), dist: +dist.toFixed(3), items: ['rdec'] }) });
+        } else for (const sg of [1, -1]) { const cc = mk(sg); pts.push({ pos: cen.clone().addScaledVector(perp, sg * (rs + 0.3)).setY(yy), act: addGroup(host, { sym: 1, ang: +Math.atan2(cc.z, cc.x).toFixed(4), dist: +Math.hypot(cc.x, cc.z).toFixed(3), items: ['rdec'] }) }); }
+      }
+    } else if (def.radial === 'leg' || def.radial === 'rcs') {
+      const ts = def.radial === 'leg' ? [0.12] : [0.85, 0.5, 0.15];
+      for (const p of stackInst) { if (p.def.r < 0.3) continue; for (const t of ts) for (const a of angs) { const d = new V3(Math.cos(a + (this.sym === 4 || this.sym === 2 ? Math.PI / 4 : 0)), 0, Math.sin(a + (this.sym === 4 || this.sym === 2 ? Math.PI / 4 : 0))); pts.push({ pos: d.clone().multiplyScalar(p.def.r + 0.2).setY(p.bot + p.def.h * t), act: addGroup(p, { sym: Math.max(this.sym, def.radial === 'leg' ? 3 : 2), ang: +(a + (this.sym === 4 || this.sym === 2 ? Math.PI / 4 : 0)).toFixed(4), items: [id], t }) }); } }
     } else if (id === 'fin' && !this.plane) {
       for (const p of stackInst) { if (p.def.r < 0.3) continue; for (const a of angs) { const d = new V3(Math.cos(a), 0, Math.sin(a)); pts.push({ pos: d.multiplyScalar(p.def.r + 0.3).setY(p.bot + 0.5), act: addGroup(p, { sym: this.sym, ang: a, items: ['fin'] }) }); } }
       for (const p of this.inst) {
@@ -303,7 +332,8 @@ export class Builder {
     const saved = savedCrafts();
     const ex = this.plane ? PLANE_EXAMPLES : EXAMPLES;
     const items = ex.map(c => [`★ ${c.name}`, () => { this.push(); this.craft = clone(c); this.sel = null; this.rebuild(true); }]);
-    for (const n of Object.keys(saved)) { const isP = saved[n].kind === 'plane'; if (isP !== this.plane) continue; items.push([`💾 ${n}`, () => { this.push(); this.craft = clone(saved[n]); this.sel = null; this.rebuild(true); }]); }
+    for (const n of Object.keys(saved)) { const isP = saved[n].kind === 'plane'; if (isP !== this.plane) continue; const miss = missingParts(saved[n]); if (miss.length) { items.push([`⚠ ${n} (needs mod part ${miss[0]})`, () => this.hint('"' + n + '" uses parts from a mod that is off or removed: ' + miss.join(', '))]); continue; }
+      items.push([`💾 ${n}`, () => { this.push(); this.craft = clone(saved[n]); this.sel = null; this.rebuild(true); }]); }
     if (Object.keys(saved).length) items.push(['🗑 Delete a saved craft…', () => {
       this.app.dialog('Delete saved craft', Object.keys(saved).map(n => [n, () => { deleteCraft(n); this.hint('Deleted ' + n); }]).concat([['Cancel', () => { }]]));
     }]);
@@ -312,7 +342,8 @@ export class Builder {
   }
   launch() {
     if (!this.inst.length) { this.hint('Build something first!'); return; }
-    this.app.startFlight(clone(this.craft));
+    const c = clone(this.craft); c.site = this.site();
+    this.app.startFlight(c);
   }
   enter(mode) { if (mode && mode !== this.mode) this.setMode(mode); this.ui.classList.remove('hidden'); this.rebuild(true); this.app.renderer.setClearColor(0x1a202b); }
   exit() { this.ui.classList.add('hidden'); }

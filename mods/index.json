@@ -1,0 +1,28 @@
+[
+  {
+    "id": "forge-extras",
+    "name": "Forge Extras Parts Pack",
+    "desc": "Stubby tank, Viper engine, ogive nose + a sample rocket",
+    "file": "parts-pack.json"
+  },
+  {
+    "id": "ember-moon",
+    "name": "Ember, the Red Moon",
+    "desc": "A new moon of Kampa with a thin atmosphere",
+    "file": "ember-moon.json"
+  },
+  {
+    "id": "flight-readout",
+    "name": "Flight Readout HUD",
+    "desc": "Extra readout: TWR, V/S, Ap/Pe, Mach, Q, heat",
+    "file": "readout-hud.json",
+    "script": true
+  },
+  {
+    "id": "nova-copilot",
+    "name": "Nova Copilot",
+    "desc": "Speech-bubble copilot with original lines",
+    "file": "nova-copilot.json",
+    "script": true
+  }
+]

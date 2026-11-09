@@ -6,6 +6,7 @@ const V3 = THREE.Vector3, TAU = Math.PI * 2;
 
 export function sideItems(gr) { return gr.items.filter(x => x !== 'rdec' && x !== 'fin'); }
 
+export function missingParts(craft) { const m = new Set(); for (const s of (craft && craft.stack) || []) { if (!PARTS[s.p]) m.add(s.p); for (const g of s.radial || []) for (const it of g.items || []) if (!PARTS[it]) m.add(it); } return [...m]; }
 export function layout(craft) {
   const inst = []; let y = 0, uid = 0, section = 0;
   craft.stack.forEach((sp, i) => {
@@ -17,7 +18,7 @@ export function layout(craft) {
     (sp.radial || []).forEach((gr, gi) => {
       const sym = gr.sym || 1, isFin = gr.items[0] === 'fin' && gr.t === undefined, hasDec = gr.items[0] === 'rdec';
       const rk = PARTS[gr.items[0]].radial;
-      if (!hasDec && !isFin && (rk === 'surf' || rk === 'gear' || rk === 'intake' || rk === 'fin')) {
+      if (!hasDec && !isFin && (rk === 'surf' || rk === 'gear' || rk === 'intake' || rk === 'fin' || rk === 'leg' || rk === 'rcs')) {
         const id = gr.items[0], pd = PARTS[id], t = gr.t === undefined ? 0.5 : gr.t;
         const rr = def.rBot !== undefined ? def.r + (def.rBot - def.r) * (1 - t) : def.r;
         const pr = Math.max(0.2, rr) * 0.95;
@@ -26,7 +27,7 @@ export function layout(craft) {
         for (let k = 0; k < sym; k++) angs.push(gr.mirror && sym === 2 ? (k === 0 ? gr.ang : Math.PI - gr.ang) : (gr.ang || 0) + k * TAU / sym);
         angs.forEach((a, k) => {
           const d = new V3(Math.cos(a), 0, Math.sin(a));
-          const span = pd.surf ? pd.surf.span : pd.gear ? pd.gear.len : (pd.span || 0.5);
+          const span = pd.surf ? pd.surf.span : pd.gear ? pd.gear.len : pd.leg ? 0.7 : pd.rcs ? 0.25 : (pd.span || 0.5);
           const chord = pd.h;
           inst.push({ uid: uid++, id, def: pd, kind: 'radial', item: 0, ang: a, si: i, gi, section, groupKey: null, sym: k, rkind: rk,
             pos: d.clone().multiplyScalar(pr).setY(ay), com: d.clone().multiplyScalar(pr + span * 0.4).setY(ay - chord * ({ delta: 0.14, strake: 0.16, tail: 0.1 }[pd.surf && pd.surf.shape] || 0)),
@@ -39,22 +40,25 @@ export function layout(craft) {
       const rs = side.reduce((m, id) => Math.max(m, PARTS[id].r), 0);
       const gkey = hasDec ? i + ':' + gi : null;
       for (let k = 0; k < sym; k++) {
-        const a = (gr.ang || 0) + k * TAU / sym, d = new V3(Math.cos(a), 0, Math.sin(a));
+        const a = gr.mirror && sym === 2 ? (k === 0 ? gr.ang : Math.PI - gr.ang) : (gr.ang || 0) + k * TAU / sym, d = new V3(Math.cos(a), 0, Math.sin(a));
         const base = { ang: a, si: i, gi, section, groupKey: gkey, sym: k };
+        // gr.dist: fixed centre distance for side stacks mounted beside another side stack (e.g. boosters on an external tank)
+        const fixed = gr.dist !== undefined ? +gr.dist : null;
         if (isFin) {
           const fy = top - def.h + 1.0;
           inst.push(Object.assign({ uid: uid++, id: 'fin', def: PARTS.fin, kind: 'radial', item: 0, pos: d.clone().multiplyScalar(pr).setY(fy),
             com: d.clone().multiplyScalar(pr + 0.4).setY(fy - 0.6), bot: fy - 1.0, top: fy, ext: pr + 0.8 }, base));
           continue;
         }
+        const dist = fixed !== null ? fixed : pr + (hasDec ? 0.22 : 0) + rs;
         if (hasDec) {
-          const ry = top - Math.min(def.h, 1.6) / 2;
-          inst.push(Object.assign({ uid: uid++, id: 'rdec', def: PARTS.rdec, kind: 'radial', item: 0, pos: d.clone().multiplyScalar(pr).setY(ry),
-            com: d.clone().multiplyScalar(pr + 0.1).setY(ry), bot: ry - 0.35, top: ry + 0.35, ext: pr + 0.22 }, base));
+          const ry = top - Math.min(def.h, 1.6) / 2, rr0 = fixed !== null ? dist - rs - 0.22 : pr;
+          inst.push(Object.assign({ uid: uid++, id: 'rdec', def: PARTS.rdec, kind: 'radial', item: 0, pos: d.clone().multiplyScalar(rr0).setY(ry),
+            com: d.clone().multiplyScalar(rr0 + 0.1).setY(ry), bot: ry - 0.35, top: ry + 0.35, ext: rr0 + 0.22 }, base));
         }
-        const dist = pr + (hasDec ? 0.22 : 0) + rs;
         let yy = top, j0 = hasDec ? 1 : 0;
         for (const id of side) { if (PARTS[id].nose) yy += PARTS[id].h; else break; }
+        if (side.length && PARTS[side[0]].raise) yy += PARTS[side[0]].raise;
         let last = null;
         gr.items.forEach((id, j) => {
           if (j < j0 || id === 'fin') return;
@@ -86,7 +90,10 @@ export function buildEvents(inst) {
   for (let s = N; s >= 0; s--) {
     if (s === N) { const e = engines(N); if (e.length) ev.push({ ignite: e }); }
     const gks = [...new Set(inst.filter(p => p.section === s && p.groupKey).map(p => p.groupKey))];
-    if (gks.length) ev.push({ drop: gks });
+    // boosters (groups with engines) drop first, plain drop tanks (e.g. an external tank) after them
+    const withEng = gks.filter(k => inst.some(p => p.groupKey === k && p.def.engine)), plain = gks.filter(k => !withEng.includes(k));
+    if (withEng.length) ev.push({ drop: withEng });
+    if (plain.length) ev.push({ drop: plain });
     if (s > 0) ev.push({ decStack: s, ignite: engines(s - 1) });
   }
   const ch = inst.filter(p => p.def.chute).map(p => p.uid);
@@ -103,7 +110,7 @@ export function eventLabel(inst, e) {
   const names = list => { const c = {}; for (const u of list) { const n = by.get(u).def.name; c[n] = (c[n] || 0) + 1; } return Object.entries(c).map(([n, k]) => (k > 1 ? k + '× ' : '') + n).join(', '); };
   const parts = [];
   if (e.decStack !== undefined) parts.push('✂ Split stage');
-  if (e.drop) parts.push('✂ Drop side boosters');
+  if (e.drop) { const eng = inst.some(p => p.groupKey && e.drop.includes(p.groupKey) && p.def.engine); parts.push(eng ? '✂ Drop side boosters' : '✂ Drop tank'); }
   if (e.ignite && e.ignite.length) parts.push('🔥 ' + names(e.ignite));
   if (e.chute) parts.push('☂ ' + names(e.chute));
   return parts.join(' · ') || '—';
@@ -123,10 +130,15 @@ export class Propulsion {
   mass() { let m = 0; for (const u of this.alive) { const p = this.by.get(u); m += p.def.dry + this.fuel.get(u); } return m * 1000; }
   pools() {
     const pools = {};
-    for (const u of this.alive) { const p = this.by.get(u); if (p.def.fuel > 0 && !p.def.srb) { const k = this.poolKey(p); (pools[k] = pools[k] || { fuel: 0, cap: 0, tanks: [] }); pools[k].fuel += this.fuel.get(u); pools[k].cap += p.def.fuel; pools[k].tanks.push(u); } }
+    for (const u of this.alive) { const p = this.by.get(u); if (p.def.fuel > 0 && !p.def.srb) { const k = this.poolKey(p); (pools[k] = pools[k] || { fuel: 0, cap: 0, tanks: [], section: p.section, feed: false }); pools[k].fuel += this.fuel.get(u); pools[k].cap += p.def.fuel; pools[k].tanks.push(u); if (p.def.feed && p.groupKey) pools[k].feed = true; } }
     return pools;
   }
-  hasFuel(u, pools) { const p = this.by.get(u); if (p.def.srb) return this.fuel.get(u) > 1e-7; const pl = pools[this.poolKey(p)]; return !!pl && pl.fuel > 1e-7; }
+  // core engines drink from a feeding drop tank (external tank) in their section first
+  engPool(p, pools) {
+    if (!p.groupKey && !p.def.srb) for (const k in pools) { const pl = pools[k]; if (pl.feed && pl.section === p.section && pl.fuel > 1e-7) return k; }
+    return this.poolKey(p);
+  }
+  hasFuel(u, pools) { const p = this.by.get(u); if (p.def.srb) return this.fuel.get(u) > 1e-7; const pl = pools[this.engPool(p, pools)]; return !!pl && pl.fuel > 1e-7; }
   stage() {
     if (this.next >= this.events.length) return null;
     const e = this.events[this.next++];
@@ -157,7 +169,7 @@ export class Propulsion {
   intakeAlive() { for (const u of this.alive) if (this.by.get(u).def.intake) return true; return false; }
   burn(throttle, p, dt, env) {
     const pools = this.pools();
-    let F = 0, mdot = 0; const firing = [], demand = {};
+    let F = 0, mdot = 0; const firing = [], demand = {}, perF = {};
     this.lastModes = {};
     for (const u of this.active) {
       if (!this.alive.has(u) || !this.hasFuel(u, pools)) continue;
@@ -179,15 +191,15 @@ export class Propulsion {
         const isp = d.ispV + (d.ispA - d.ispV) * p;
         f1 = md * isp * G0;
       }
-      F += f1; mdot += md; firing.push(u);
+      F += f1; mdot += md; firing.push(u); perF[u] = f1;
       if (d.srb) { if (dt > 0) this.fuel.set(u, Math.max(0, this.fuel.get(u) - md * dt / 1000)); }
-      else { const k = this.poolKey(x); demand[k] = (demand[k] || 0) + md; }
+      else { const k = this.engPool(x, pools); demand[k] = (demand[k] || 0) + md; }
     }
     if (dt > 0) for (const k in demand) {
       const pl = pools[k], take = Math.min(pl.fuel, demand[k] * dt / 1000), f = pl.fuel > 0 ? take / pl.fuel : 0;
       for (const u of pl.tanks) this.fuel.set(u, this.fuel.get(u) * (1 - f));
     }
-    return { F, mdot, firing, pools };
+    return { F, mdot, firing, pools, perF };
   }
   // seconds until the first engine/pool currently burning runs dry (full throttle)
   timeToDepletion(throttle) {
@@ -198,7 +210,7 @@ export class Propulsion {
       let md = d.thrust * 1000 / (d.ispV * G0) * (d.srb ? 1 : throttle);
       if (d.air) { const ae = this.airEngine(d, u, this._env || { rho: 1.225, mach: 0 }); md = ae.T * throttle / (ae.isp * G0); }
       if (md <= 0) continue;
-      if (d.srb) t = Math.min(t, this.fuel.get(u) * 1000 / md); else { const k = this.poolKey(x); demand[k] = (demand[k] || 0) + md; }
+      if (d.srb) t = Math.min(t, this.fuel.get(u) * 1000 / md); else { const k = this.engPool(x, pools); demand[k] = (demand[k] || 0) + md; }
     }
     for (const k in demand) t = Math.min(t, pools[k].fuel * 1000 / demand[k]);
     return t;
@@ -245,6 +257,15 @@ export const EXAMPLES = [
     { p: 't400', radial: [{ sym: 2, ang: 0, items: ['rdec', 'nose1', 's_thunder'], fins: true }] }, { p: 'e_hammer' }] },
   { name: 'Lumo Lander', stack: [{ p: 'chute' }, { p: 'pod1' }, { p: 't200' }, { p: 'e_spark', radial: [] }, { p: 'dec1' }, { p: 't400' }, { p: 'e_wisp' }, { p: 'dec1' },
     { p: 't400' }, { p: 't400', radial: [{ sym: 4, ang: Math.PI / 4, items: ['rdec', 'nose1', 's_thunder'], fins: true }] }, { p: 'e_hammer' }] },
+  { name: 'Albatross Shuttle', kind: 'shuttle', site: 'pad', stack: [
+    { p: 'ob_nose', radial: [{ sym: 1, ang: Math.PI / 2, items: ['rdec', 'et_big'] },
+      { sym: 2, mirror: true, ang: 0.86, dist: 4.45, items: ['rdec', 's_pillar'] },
+      { sym: 1, ang: Math.PI / 2, items: ['gear_nose'], t: 0.3 }] },
+    { p: 'ob_bay', radial: [{ sym: 2, mirror: true, ang: 0, items: ['wing_orb'], t: 0.15 }] },
+    { p: 'ob_aft', radial: [{ sym: 2, mirror: true, ang: 0, items: ['elevon'], t: 0.12 }, { sym: 2, mirror: true, ang: 0, items: ['elevon'], t: 0.5 },
+      { sym: 1, ang: -Math.PI / 2, items: ['rudder'], t: 0.5 }, { sym: 2, mirror: true, ang: Math.PI / 2 - 0.55, items: ['gear_main'], t: 0.5 },
+      { sym: 2, mirror: true, ang: -0.6, items: ['rcs_quad'], t: 0.8 }] },
+    { p: 'e_triad' }] },
   { name: 'Heavy Barrel', stack: [{ p: 'chute' }, { p: 'pod3' }, { p: 'dec2' }, { p: 'b800' }, { p: 'e_wisp' }, { p: 'dec2' }, { p: 'b3200', radial: [{ sym: 4, ang: Math.PI / 4, items: ['fin'] }] }, { p: 'e_bulwark' }] },
 ];
 const H = Math.PI / 2;

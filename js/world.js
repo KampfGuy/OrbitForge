@@ -37,9 +37,17 @@ export function surfaceColor(body, d, out, detail = 0) {
     const v = 0.42 + 0.3 * n - (cr > 0.62 ? (cr - 0.62) * 1.4 : 0);
     return out.setRGB(v, v, v * 1.02);
   }
+  if (body.kind === 'custom') {
+    const cs = body._cols || (body._cols = ['low', 'mid', 'high', 'poles'].map((k, i) => { try { return new THREE.Color(body.colors[k] || ['#5a4a3a', '#8a7a62', '#c9b99a', '#eeeeee'][i]); } catch (e) { return new THREE.Color(0x888888); } }));
+    const n = fbm(d, 3.2, oct, 61 + body.index), m = fbm(d, 11, detail ? 5 : 3, 77);
+    if (body.colors && body.colors.poles && Math.abs(d.y) + (m - 0.5) * 0.2 > 0.86) return out.copy(cs[3]);
+    if (n < 0.47) return out.copy(cs[0]).lerp(cs[1], n / 0.47 * 0.6);
+    return out.copy(cs[1]).lerp(cs[2], clamp01((n - 0.47) * 3.2)).multiplyScalar(0.9 + 0.2 * m);
+  }
   const n = fbm(d, 4, oct, 41);
   return out.setRGB(0.55 + 0.25 * n, 0.8 + 0.12 * n, 0.72 + 0.15 * n);
 }
+const clamp01 = x => Math.max(0, Math.min(1, x));
 
 function colorizeSphere(geo, body) {
   const pos = geo.attributes.position, col = new Float32Array(pos.count * 3), d = new V3(), c = new THREE.Color();

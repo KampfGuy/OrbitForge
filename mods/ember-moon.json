@@ -1,0 +1,39 @@
+{
+  "id": "ember-moon",
+  "name": "Ember, the Red Moon",
+  "version": "1.0",
+  "author": "Kampfguy",
+  "api": 1,
+  "description": "Adds Ember: a small rust-red moon of Kampa with a thin, hazy atmosphere, orbiting between Lumo and Pip.",
+  "planets": [
+    {
+      "name": "Ember",
+      "parent": "Kampa",
+      "radius": 120000,
+      "gravity": 1.1,
+      "orbit": {
+        "a": 24000000,
+        "inc": 3,
+        "lan": 40,
+        "phase": 200
+      },
+      "rotPeriod": 60000,
+      "atm": {
+        "height": 25000,
+        "scale": 3500,
+        "rho0": 0.12
+      },
+      "colors": {
+        "low": "#7a3422",
+        "mid": "#a5532f",
+        "high": "#d58a5c",
+        "poles": "#e9d3c0"
+      },
+      "desc": "Rust-red dusty moon"
+    }
+  ],
+  "tips": [
+    "Brushing red dust off the Ember rover…",
+    "Ember: thin air, but just enough for a chute to help a little."
+  ]
+}

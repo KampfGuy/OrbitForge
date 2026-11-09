@@ -5,11 +5,16 @@ import { layout, buildEvents, Propulsion, eventLabel, dvRemaining } from './craf
 import { BODIES, HOME, G0, propagate, elements, predict, moonState, bodyGlobalPos, atmosphere, horizonFrame, fmtDist, fmtTime, clamp } from './orbit.js';
 import { BodyView, makeStars, makeSun, SUN_DIR } from './world.js';
 import { Navball } from './navball.js';
+import { CTRL, saveCtrl, shapeStick, easeKey, TILT, enableTilt, disableTilt, recenterTilt } from './control.js';
+import { Autopilot } from './autopilot.js';
+import { maxTemp } from './parts.js';
+import { AUDIO } from './audio.js';
+import { MODS } from './mods.js';
 const V3 = THREE.Vector3, Q = THREE.Quaternion;
 const DT = 0.02;
 const RAILS = [1, 5, 10, 50, 100, 1000, 10000, 100000];
 const PHYS = [1, 2, 3, 4];
-const CRASH_SPEED = 11;
+const CRASH_SPEED = 11, LEG_CRASH = 14;
 const Y = new V3(0, 1, 0);
 const SITE = new V3(1, 0, 0);
 // runway in site-local coords (x = south, z = west); planes spawn at the west end facing east
@@ -61,7 +66,7 @@ export class Flight {
     this.t = this.t0 = 0;
     this.body = HOME;
     this.destroyed = false; this.recovered = false; this.ended = false;
-    this.throttle = 0; this.sas = false; this.sasMode = 'stab'; this.holdQ = null;
+    this.throttle = 0; this.sas = false; this.sasMode = 'stab'; this.holdQ = this.holdPB = null;
     this.warpIdx = 0; this.warpMode = 'phys'; this.acc = 0;
     this.map = false; this.mapFocus = null; this.node = null; this.patches = []; this.nodePatches = []; this.predTimer = 0;
     this.camState = { yaw: 1.85, pitch: 0.12, dist: 30, mapYaw: 0.6, mapPitch: 0.9, mapDist: 4e6 };
@@ -74,6 +79,8 @@ export class Flight {
     // vessel
     if (this.root) this.scene.remove(this.root);
     this.root = new THREE.Group(); this.shape = new THREE.Group(); this.root.add(this.shape); this.scene.add(this.root);
+    this.plasma = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.55), new THREE.MeshBasicMaterial({ color: 0xff7a30, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    this.plasma.visible = false; this.root.add(this.plasma);
     this.inst = layout(craft); this.events = buildEvents(this.inst); this.prop = new Propulsion(this.inst, this.events);
     this.meshes = new Map(); this.plumes = new Map(); this.canopies = new Map();
     for (const p of this.inst) {
@@ -89,12 +96,25 @@ export class Flight {
     this.gears = this.inst.filter(p => p.def.gear).map(p => {
       p.tip = p.pos.clone().addScaledVector(p.dir, p.def.gear.len - 0.3).add(new V3(0, 0, 0.3)); return p; });
     this.isPlane = craft.kind === 'plane' || this.gears.length > 0;
-    this.gearDown = true; this.gearFrac = 1; this.brakes = false; this.steer = 0;
+    this.site = craft.site || (craft.kind === 'plane' ? 'runway' : 'pad');
+    this.padMode = this.site === 'pad' && this.gears.length > 0;
+    this.wingArea = this.surfs.filter(p => Math.abs(p.n.z) > 0.5).reduce((a, p) => a + p.def.surf.area, 0);
+    this.winged = this.wingArea > 3;
+    this.gearDown = !this.padMode; this.gearFrac = this.gearDown ? 1 : 0; this.brakes = false; this.steer = 0; this.dragChute = false;
     this.ctrlAuth = [0, 0, 0];
+    this.legs = this.inst.filter(p => p.def.leg); this.legsDown = false; this.legFrac = 0;
+    this.rcsBlocks = this.inst.filter(p => p.def.rcs); this.rcsOn = false; this.trnMode = false; this.trn = [0, 0, 0];
+    this.mono = new Map(this.inst.filter(p => p.def.mono).map(p => [p.uid, p.def.mono]));
+    this.bays = this.inst.filter(p => p.def.bay); this.bayOpen = false; this.bayFrac = 0;
+    this.temps = new Map(this.inst.map(p => [p.uid, 290])); this.heatFlux = 0; this.heatMax = 0;
+    this.fine = false; this.holdQ = this.holdPB = null; this.integ = [0, 0, 0]; this.keyRamp = [0, 0, 0]; this._pilotT = -99;
+    if (!this.ap) this.ap = new Autopilot(this); this.ap.off(true);
+    for (const p of this.rcsBlocks) { const m = this.meshes.get(p.uid); const pf = new THREE.Mesh(this.puffGeo || (this.puffGeo = new THREE.SphereGeometry(0.18, 6, 4)), this.puffMat || (this.puffMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false }))); pf.visible = false; pf.position.set(0.32, 0, 0); m.add(pf); p.puff = pf; }
     this.ui.classList.toggle('plane', this.isPlane);
+    this.ui.classList.toggle('haslegs', this.legs.length > 0); this.ui.classList.toggle('hasrcs', this.rcsBlocks.length > 0); this.ui.classList.toggle('hasbay', this.bays.length > 0);
     this.com = new V3(); this.recomputeShape(true);
     const R = HOME.radius, qr = bodyRot(HOME, this.t);
-    if (this.isPlane) {
+    if (this.site === 'runway') {
       // place on the runway threshold, nose east, wings level
       const up0 = siteToWorld(RUNWAY.x, RUNWAY.z0, R), f0 = horizonFrame(up0);
       const m4 = new THREE.Matrix4().makeBasis(f0.north, f0.east, up0.clone().negate());
@@ -115,7 +135,9 @@ export class Flight {
     this.updatePrediction(true);
     this.refreshStages();
     this.showUI(true);
-    this.toast(this.isPlane ? 'On the runway. STAGE starts the engine, throttle up, pull up (S / stick down) at ~70 m/s.' : 'On the pad. Throttle up (Shift / slider) and press STAGE (Space) to launch.', 5000);
+    this.buildPopovers();
+    this.toast(this.site === 'runway' ? 'On the runway. STAGE starts the engine, throttle up, pull the stick down (S) at ~70 m/s.' : this.winged ? 'On the pad. Tap ◎ → ASCENT for an automatic climb to orbit, or throttle up and STAGE.' : 'On the pad. Throttle up and press STAGE (Space). ◎ → ASCENT flies a gravity turn for you.', 5000);
+    AUDIO.reset(); MODS.emit('flightStart', this);
   }
   stop() { this.showUI(false); }
 
@@ -152,6 +174,8 @@ export class Flight {
     this.area = Math.PI * Math.pow(Math.max(...this.inst.filter(p => alive.has(p.uid) && p.kind === 'stack').map(p => p.def.r), 0.3), 2);
     this.cd0 = top && (top.def.nose || top.def.chute || top.id.startsWith('pod')) ? 0.38 : 0.7;
     this.torque = this.inst.filter(p => alive.has(p.uid) && p.def.torque).reduce((s, p) => s + p.def.torque * 1000, 0);
+    this.rcsTorque = 0; this.rcsF = 0;
+    for (const p of this.inst) if (alive.has(p.uid) && p.def.rcs) { this.rcsF += p.def.rcs * 1000; this.rcsTorque += p.def.rcs * 1000 * Math.max(0.6, Math.hypot(p.com.y - c.y, p.attachR || 0.6)) * 1.5; }
     this.hasControl = this.torque > 0;
     for (const [u, pl] of this.plumes) if (!alive.has(u)) pl.visible = false;
   }
@@ -159,7 +183,7 @@ export class Flight {
   // ---------------- UI ----------------
   buildUI() {
     const ui = this.ui = el('div', 'fui hidden', '', document.getElementById('ui'));
-    const btn = (parent, label, cls, fn, title) => { const b = el('button', cls, label, parent); if (title) b.title = title; b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); fn(b); }); return b; };
+    const btn = this._btn = (parent, label, cls, fn, title) => { const b = el('button', cls, label, parent); if (title) b.title = title; b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); AUDIO.unlock(); fn(b); }); return b; };
     // top pill: altitude + speed, tap for details (auto-collapses)
     this.hud = el('div', 'ftop panel', '', ui);
     this.hudMain = el('div', 'hmain', '', this.hud); this.hudDet = el('div', 'hdet', '', this.hud);
@@ -176,14 +200,17 @@ export class Flight {
     const bot = el('div', 'fbottom', '', ui);
     const sl = el('div', 'sascol l', '', bot), mid = el('div', 'fmid', '', bot), sr = el('div', 'sascol r', '', bot);
     this.sasBtn = btn(sl, 'SAS', 'sb sas', () => this.toggleSAS(), 'T');
-    this.sasModeBtn = btn(sl, '◎', 'sb mode', () => this.sasPop.classList.toggle('hidden'), 'SAS mode');
+    this.sasModeBtn = btn(sl, '◎', 'sb mode', () => this.togglePop(this.sasPop), 'SAS modes + autopilot');
+    this.actBtn = btn(sl, '⋯', 'sb act', () => this.togglePop(this.actPop), 'Actions: RCS, legs, bay, quicksave, tilt, sound');
     this.gearBtn = btn(sr, 'GEAR', 'sb pl gear on', () => this.toggleGear(), 'G');
-    this.brkBtn = btn(sr, 'BRK', 'sb pl', () => { this.brakes = !this.brakes; }, 'B');
+    this.brkBtn = btn(sr, 'BRK', 'sb pl brk', () => { this.brakes = !this.brakes; }, 'B (airbrake in flight)');
     this.sasPop = el('div', 'saspop panel hidden', '', bot);
-    this.sasBtns = {};
-    const modes = [['stab', '◎', 'Hold'], ['pro', '⊕', 'Prograde'], ['retro', '⊗', 'Retro'], ['norm', '▲', 'Normal'], ['anti', '▼', 'Anti-norm'], ['radOut', '⊙', 'Rad out'], ['radIn', '⦾', 'Rad in'], ['node', '◆', 'Node']];
+    this.actPop = el('div', 'saspop actpop panel hidden', '', bot);
+    const modes = this.sasModes = [['stab', '◎', 'Hold'], ['pro', '⊕', 'Prograde'], ['retro', '⊗', 'Retro'], ['norm', '▲', 'Normal'], ['anti', '▼', 'Anti-norm'], ['radOut', '⊙', 'Rad out'], ['radIn', '⦾', 'Rad in'], ['node', '◆', 'Node']];
     this.modeGlyph = Object.fromEntries(modes.map(m => [m[0], m[1]])); this.modeGlyph.custom = '✦';
-    for (const [k, lab, name] of modes) this.sasBtns[k] = btn(this.sasPop, `${lab}<small>${name}</small>`, 'sb pm', () => { this.setSAS(k); this.sasPop.classList.add('hidden'); }, k);
+    this.sasBtns = {};
+    this.apChip = el('div', 'apchip panel hidden', '', ui);
+    this.apChip.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); this.ap.off(); });
     this.speedEl = el('button', 'speedro', '', mid);
     this.speedEl.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); this.navMode = this.navMode === 'auto' ? (this.navFrame === 'surface' ? 'orbit' : 'surface') : (this.navMode === 'surface' ? 'orbit' : 'auto'); });
     this.navModeBtn = this.speedEl;
@@ -204,7 +231,7 @@ export class Flight {
     // left thumb: joystick + roll
     const left = this.leftEl = el('div', 'fleft', '', ui);
     const rr = el('div', 'rollrow', '', left);
-    this.joy = el('div', 'joy', '', left); this.knob = el('div', 'knob', '', this.joy);
+    this.joy = el('div', 'joy', '', left); this.knob = el('div', 'knob', '', this.joy); el('div', 'finebadge', 'FINE', this.joy); el('div', 'trnbadge', 'RCS MOVE', this.joy);
     this.joyV = { x: 0, y: 0 }; this.rollIn = 0;
     const joyMove = e => { const r = this.joy.getBoundingClientRect(); const cx = r.left + r.width / 2, cy = r.top + r.height / 2, R = r.width / 2;
       let x = (e.clientX - cx) / R, y = (e.clientY - cy) / R; const l = Math.hypot(x, y); if (l > 1) { x /= l; y /= l; }
@@ -213,7 +240,8 @@ export class Flight {
     this.joy.addEventListener('pointermove', e => { if (this._joy) joyMove(e); });
     const joyEnd = () => { this._joy = false; this.joyV.x = this.joyV.y = 0; this.knob.style.transform = ''; };
     this.joy.addEventListener('pointerup', joyEnd); this.joy.addEventListener('pointercancel', joyEnd);
-    for (const [lab, val] of [['⟲', -1], ['⟳', 1]]) { const b = el('button', 'sb roll', lab, rr); b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); this.rollIn = val; }); const end = () => { this.rollIn = 0; }; b.addEventListener('pointerup', end); b.addEventListener('pointercancel', end); b.addEventListener('pointerleave', end); }
+    this.rollBtns = [];
+    for (const [lab, val] of [['⟲', -1], ['⟳', 1]]) { const b = el('button', 'sb roll', lab, rr); this.rollBtns.push(b); b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); this.rollIn = val; }); const end = () => { this.rollIn = 0; }; b.addEventListener('pointerup', end); b.addEventListener('pointercancel', end); b.addEventListener('pointerleave', end); }
     // top-right tools
     const tools = el('div', 'ftools', '', ui);
     this.mapBtn = btn(tools, 'MAP', 'sb', () => this.toggleMap(), 'M');
@@ -234,7 +262,61 @@ export class Flight {
   }
   setHudOpen(on) { if (on && this.stagesOpen && this.app.W < 900) this.setStagesOpen(false); this.hudOpen = on; this.hud.classList.toggle('open', on); this.ui.classList.toggle('hudopen', on); clearTimeout(this._hudT); if (on && this.app.W < 900) this._hudT = setTimeout(() => this.setHudOpen(false), 6000); }
   setStagesOpen(on) { if (on && this.hudOpen && this.app.W < 900) this.setHudOpen(false); this.stagesOpen = on; this.stageBox.classList.toggle('hidden', !on); this.stageChip.classList.toggle('open', on); this.refreshStages(); clearTimeout(this._stT); if (on) this._stT = setTimeout(() => this.setStagesOpen(false), 6000); }
-  toggleGear() { this.gearDown = !this.gearDown; this.toast(this.gearDown ? 'Gear down' : 'Gear up', 1000); }
+  toggleGear() { if (!this.gears.length && this.legs.length) return this.toggleLegs(); this.gearDown = !this.gearDown; this.toast(this.gearDown ? 'Gear down' : 'Gear up', 1000); AUDIO.click(); }
+  togglePop(p) { const open = p.classList.contains('hidden'); this.sasPop.classList.add('hidden'); this.actPop.classList.add('hidden'); if (open) { p.classList.remove('hidden'); clearTimeout(this._popT); this._popT = setTimeout(() => p.classList.add('hidden'), 9000); } }
+  closePops() { this.sasPop.classList.add('hidden'); this.actPop.classList.add('hidden'); }
+  // ◎ popover: SAS modes + autopilot + precision; ⋯ popover: craft actions
+  buildPopovers() {
+    const btn = this._btn, P = this.sasPop; P.innerHTML = '';
+    this.sasBtns = {};
+    for (const [k, lab, name] of this.sasModes) this.sasBtns[k] = btn(P, `${lab}<small>${name}</small>`, 'sb pm', () => { this.ap.off(); this.setSAS(k); this.closePops(); }, k);
+    this.apBtns = {};
+    if (this.winged) {
+      for (const [k, lab, name] of [['hold', '✈', 'HDG+ALT'], ['reentry', '☄', 'Reentry'], ['land', '🛬', 'Land']]) this.apBtns[k] = btn(P, `${lab}<small>${name}</small>`, 'sb pm ap', () => { this.ap.toggle(k); this.closePops(); }, 'Autopilot: ' + name);
+      if (!this.isPlane || this.site === 'pad') this.apBtns.ascent = btn(P, `🚀<small>Ascent</small>`, 'sb pm ap', () => { this.ap.toggle('ascent'); this.closePops(); }, 'Autopilot: gravity turn to orbit');
+      else el('div', 'pm gap', '', P);
+    } else {
+      this.apBtns.ascent = btn(P, `🚀<small>Ascent AP</small>`, 'sb pm ap w2', () => { this.ap.toggle('ascent'); this.closePops(); }, 'Autopilot: gravity turn to orbit');
+      btn(P, `−<small>10 km</small>`, 'sb pm', () => { this.ap.targetAlt = Math.max(72000, this.ap.targetAlt - 10000); this.buildPopovers(); this.sasPop.classList.remove('hidden'); });
+      this.apAltBtn = btn(P, `+<small>${(this.ap.targetAlt / 1000).toFixed(0)} km</small>`, 'sb pm', () => { this.ap.targetAlt = Math.min(400000, this.ap.targetAlt + 10000); this.buildPopovers(); this.sasPop.classList.remove('hidden'); });
+    }
+    this.fineBtn = btn(P, `🎯<small>Fine</small>`, 'sb pm' + (this.fine ? ' on' : ''), () => { this.setFine(!this.fine); this.buildPopovers(); }, 'Precision controls (Caps Lock)');
+    this.assistBtn = btn(P, `🛟<small>Assist</small>`, 'sb pm' + (CTRL.assist ? ' on' : ''), () => { CTRL.assist = !CTRL.assist; saveCtrl(); this.toast(CTRL.assist ? 'Steering assist ON: the craft stops turning when you let go' : 'Steering assist OFF: raw controls, it keeps spinning', 2500); this.buildPopovers(); }, 'Steering assist');
+    btn(P, `⚙<small>Controls</small>`, 'sb pm w2', () => { this.closePops(); this.settings(); });
+    // actions
+    const A = this.actPop; A.innerHTML = '';
+    if (this.rcsBlocks.length) { this.rcsBtn = btn(A, `💨<small>RCS</small>`, 'sb pm' + (this.rcsOn ? ' on' : ''), () => { this.toggleRCS(); this.buildPopovers(); this.actPop.classList.remove('hidden'); }, 'R');
+      this.trnBtn = btn(A, `✥<small>Move</small>`, 'sb pm' + (this.trnMode ? ' on' : ''), () => { this.setTrn(!this.trnMode); this.toast(this.trnMode ? 'Joystick now translates with RCS (twist buttons = forward/back)' : 'Joystick steers again', 2200); this.buildPopovers(); }, 'Joystick translates (RCS)'); }
+    if (this.legs.length) this.legBtn = btn(A, `🦵<small>Legs</small>`, 'sb pm' + (this.legsDown ? ' on' : ''), () => { this.toggleLegs(); this.buildPopovers(); this.actPop.classList.remove('hidden'); }, 'G');
+    if (this.bays.length) this.bayBtn = btn(A, `📦<small>Bay</small>`, 'sb pm' + (this.bayOpen ? ' on' : ''), () => { this.toggleBay(); this.buildPopovers(); this.actPop.classList.remove('hidden'); }, 'Bay doors');
+    if (this.gears.length) this.brkBtn2 = btn(A, `🛑<small>Brakes</small>`, 'sb pm' + (this.brakes ? ' on' : ''), () => { this.brakes = !this.brakes; this.buildPopovers(); this.actPop.classList.remove('hidden'); }, 'B');
+    btn(A, `💾<small>Q.Save</small>`, 'sb pm', () => { this.quicksave(); this.closePops(); }, 'F5');
+    btn(A, `⏏<small>Q.Load</small>`, 'sb pm', () => { this.quickload(); }, 'F9');
+    btn(A, `📱<small>Tilt</small>`, 'sb pm' + (TILT.on ? ' on' : ''), async () => { if (TILT.on) { disableTilt(); this.toast('Tilt steering off'); } else { const err = await enableTilt(); this.toast(err || 'Tilt steering on: hold the phone how you like, that is centre', 2500); } this.buildPopovers(); }, 'Tilt to steer');
+    btn(A, `${CTRL.sound ? '🔊' : '🔇'}<small>Sound</small>`, 'sb pm' + (CTRL.sound ? ' on' : ''), () => { CTRL.sound = !CTRL.sound; saveCtrl(); AUDIO.setOn(CTRL.sound); this.buildPopovers(); this.actPop.classList.remove('hidden'); });
+    for (const b of MODS.buttons('flight')) btn(A, `${b.icon || '🧩'}<small>${b.label}</small>`, 'sb pm', () => { this.closePops(); MODS.safe(b.mod, () => b.onClick(MODS.api(b.mod).flight)); });
+  }
+  settings(after) {
+    const html = `<div class="sets">
+      <div class="srow2"><span>Stick sensitivity</span><button data-k="sens-">−</button><b id="s_sens">${CTRL.sens.toFixed(1)}×</b><button data-k="sens+">+</button></div>
+      <div class="srow2"><span>Steering assist<small>stops the turn when you let go</small></span><button data-k="assist" class="${CTRL.assist ? 'on' : ''}">${CTRL.assist ? 'ON' : 'OFF'}</button></div>
+      <div class="srow2"><span>Control feel<small>auto: planes pitch/roll, rockets pitch/yaw</small></span><button data-k="feel">${CTRL.feel.toUpperCase()}</button></div>
+      <div class="srow2"><span>Tilt to steer<small>uses the phone's motion sensor</small></span><button data-k="tilt" class="${TILT.on ? 'on' : ''}">${TILT.on ? 'ON' : 'OFF'}</button><button data-k="recenter">Centre</button></div>
+      <div class="srow2"><span>Sound effects</span><button data-k="sound" class="${CTRL.sound ? 'on' : ''}">${CTRL.sound ? 'ON' : 'OFF'}</button></div>
+      <p class="small">Precision mode: Caps Lock or ◎ → Fine. Keys: W/S pitch · A/D yaw · Q/E roll · R RCS · H/N J/L I/K RCS translate · G gear/legs · F5/F9 quicksave/load.</p></div>`;
+    this.app.dialog('Controls & sound', [['Done', () => { if (after) after(); }]], html);
+    const d = document.getElementById('dialog');
+    d.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', async e => {
+      e.stopPropagation(); const k = b.dataset.k;
+      if (k === 'sens-') CTRL.sens = Math.max(0.4, +(CTRL.sens - 0.1).toFixed(1)); if (k === 'sens+') CTRL.sens = Math.min(2, +(CTRL.sens + 0.1).toFixed(1));
+      if (k === 'assist') CTRL.assist = !CTRL.assist;
+      if (k === 'feel') { const o = ['auto', 'rocket', 'plane']; CTRL.feel = o[(o.indexOf(CTRL.feel) + 1) % 3]; }
+      if (k === 'tilt') { if (TILT.on) disableTilt(); else { const err = await enableTilt(); if (err) this.toast(err, 3000); } }
+      if (k === 'recenter') { recenterTilt(); this.toast('Tilt centred', 1000); }
+      if (k === 'sound') { CTRL.sound = !CTRL.sound; AUDIO.setOn(CTRL.sound); }
+      saveCtrl(); this.settings(after); if (this.ui && !this.ui.classList.contains('hidden')) this.buildPopovers();
+    }));
+  }
   buildNodePanel() {
     const P = this.nodePanel; P.innerHTML = '';
     const row = cls => el('div', 'nrow ' + (cls || ''), '', P);
@@ -270,15 +352,16 @@ export class Flight {
 
   // ---------------- controls ----------------
   setThrottle(x) { this.throttle = clamp(x, 0, 1); }
-  toggleSAS() { this.sas = !this.sas; this.holdQ = null; if (this.sas && !this.hasControl) this.toast('No reaction wheel: SAS works through engine gimbal only'); }
+  toggleSAS() { if (this.ap.active) { this.ap.off(); this.sas = true; this.sasMode = 'stab'; this.holdQ = this.holdPB = null; return; } this.sas = !this.sas; this.holdQ = this.holdPB = null; if (this.sas && !this.hasControl) this.toast('No reaction wheel: SAS works through engine gimbal only'); }
   setSAS(k) {
     if (k === 'node' && !this.node) { this.toast('No maneuver node'); return; }
-    this.sas = true; this.sasMode = k; this.holdQ = null;
+    this.sas = true; this.sasMode = k; this.holdQ = this.holdPB = null;
   }
   doStage() {
     if (this.destroyed) return;
     const res = this.prop.stage();
     if (!res) { this.toast('Nothing left to stage'); return; }
+    AUDIO.stage(!!(res.e.ignite && res.e.ignite.length), res.removed.length > 0); MODS.emit('stage', this, res.e);
     if (res.removed.length) this.spawnDebris(res.removed, res.e);
     this.recomputeShape(false);
     this.refreshStages();
@@ -299,11 +382,12 @@ export class Flight {
     if (alt < 5000) return 2; if (alt < 30000) return 4; if (alt < 120000) return 5; if (alt < 600000) return 6; return RAILS.length - 1;
   }
   thrusting() { if (this.throttle <= 0 && ![...this.prop.active].some(u => this.prop.by.get(u).def.srb && this.prop.fuel.get(u) > 0)) return false; const b = this.prop.burn(this.throttle, 0, 0); return b.F > 0; }
+  translating() { if (!this.rcsOn || !this.rcsBlocks.length) return false; const k = this.keys; return !!(k.KeyH || k.KeyN || k.KeyJ || k.KeyL || k.KeyI || k.KeyK || (this.trnMode && (Math.abs(this.joyV.x) + Math.abs(this.joyV.y) + Math.abs(this.rollIn || 0) > 0.02))); }
   canRails() {
     if (this.destroyed) return false;
     if (this.landed) return !this.thrusting();
     const alt = this.r.length() - this.body.radius;
-    return !this.thrusting() && !this.contact && (!this.body.atm || alt > this.body.atm.height);
+    return !this.thrusting() && !this.translating() && !this.contact && (!this.body.atm || alt > this.body.atm.height);
   }
   toggleMap() {
     this.map = !this.map; this.mapTools.classList.toggle('hidden', !this.map); this.ui.classList.toggle('mapmode', this.map);
@@ -333,6 +417,104 @@ export class Flight {
       `<p>Max altitude: <b>${fmtDist(s.maxAlt)}</b><br>Max speed: <b>${s.maxSpeed.toFixed(0)} m/s</b><br>Visited: <b>${[...s.visited].join(', ')}</b><br>Mission time: <b>${fmtTime(this.t - this.t0)}</b></p>`);
   }
 
+  // ---------------- legs, RCS, bay, heat ----------------
+  legFoot(p, out) { const th = 2.95 - 2.35 * this.legFrac, L = p.def.leg.len; return out.copy(p.pos).addScaledVector(p.dir, 0.12 + L * Math.sin(th)).add(tmpC.set(0, -L * Math.cos(th), 0)); }
+  toggleLegs() { if (!this.legs.length) return; this.legsDown = !this.legsDown; this.toast(this.legsDown ? 'Landing legs down' : 'Landing legs up', 1000); AUDIO.click(); }
+  toggleBay() { if (!this.bays.length) { this.toast('No payload bay'); return; } this.bayOpen = !this.bayOpen; this.toast(this.bayOpen ? 'Bay doors opening (more drag, keep them shut for reentry)' : 'Bay doors closing', 1800); AUDIO.click(); }
+  toggleRCS() { if (!this.rcsBlocks.length) { this.toast('No RCS thrusters on this craft'); return; } this.rcsOn = !this.rcsOn; if (!this.rcsOn) this.setTrn(false); this.toast(this.rcsOn ? 'RCS on' : 'RCS off', 1000); AUDIO.click(); }
+  setTrn(on) { this.trnMode = on && this.rcsBlocks.length > 0; if (this.trnMode && !this.rcsOn) this.rcsOn = true; this.ui.classList.toggle('trn', this.trnMode); if (on && !this.rcsBlocks.length) this.toast('Translation needs RCS thrusters'); }
+  setFine(on) { this.fine = on; this.ui.classList.toggle('fine', on); this.toast(on ? 'Precision controls ON (Caps Lock)' : 'Precision controls off', 1200); }
+  get monoLeft() { let m = 0; for (const [u, v] of this.mono) if (this.prop.alive.has(u)) m += v; return m; }
+  rcsStep(dt, u, acc) {
+    this._rcsFire = 0;
+    if (!this.rcsOn || !this.rcsBlocks.length) return;
+    const k = this.keys, mono = this.monoLeft; if (mono <= 1e-6) return;
+    // translation: H/N fore-aft, J/L left-right, I/K up-down (or the stick in TRN mode)
+    const t = [(k.KeyL ? 1 : 0) - (k.KeyJ ? 1 : 0), (k.KeyH ? 1 : 0) - (k.KeyN ? 1 : 0), (k.KeyI ? 1 : 0) - (k.KeyK ? 1 : 0)];
+    if (this.trnMode) { t[0] += this.joyV.x; t[2] += -this.joyV.y; t[1] += this.rollIn; }
+    for (let i = 0; i < 3; i++) t[i] = clamp(t[i], -1, 1) * (this.fine ? 0.3 : 1);
+    this.trn = t;
+    const F = this.rcsF;
+    const lt = new V3(-t[0], t[1], -t[2]).multiplyScalar(F / this.mass).applyQuaternion(this.q);
+    acc.add(lt);
+    const rot = this.torque > 0 ? 0.35 : 1; // reaction wheels take most of the turning work
+    const use = (Math.abs(t[0]) + Math.abs(t[1]) + Math.abs(t[2]) + rot * (Math.abs(u[0]) + Math.abs(u[1]) + Math.abs(u[2])) * 0.5) * F / (240 * G0) / 1000 * dt;
+    this._rcsFire = use / dt;
+    let need = use; for (const [uid, v] of this.mono) { if (need <= 0) break; if (!this.prop.alive.has(uid) || v <= 0) continue; const d = Math.min(v, need); this.mono.set(uid, v - d); need -= d; }
+  }
+  heatStep(dt, atm, vs, vsm) {
+    const rho = atm.rho;
+    const q = rho > 0 && vsm > 200 ? 4.4e-4 * Math.sqrt(rho) * vsm * vsm * vsm : 0; // convective flux, W/m^2 (game-scaled)
+    this.heatFlux = q;
+    const Tamb = rho > 0 ? 220 + 70 * atm.p : 140, alive = this.prop.alive;
+    const uL = vsm > 1 ? vs.clone().divideScalar(vsm).applyQuaternion(tmpQ.copy(this.q).invert()) : null;
+    this._heatDir = uL;
+    let pmax = -Infinity, smax = -Infinity;
+    if (uL) for (const p of this.inst) { if (!alive.has(p.uid)) continue; const pr = tmpA.copy(p.com).sub(this.com).dot(uL) + (p.kind === 'stack' ? Math.abs(uL.y) * p.def.h * 0.5 : 0); p._proj = pr; pmax = Math.max(pmax, pr); if (p.def.shield) smax = Math.max(smax, pr); }
+    this._heatFront = pmax;
+    let hot = 0, hotP = null;
+    const len = this.bounds.len, sb = 5.67e-8 * 0.8;
+    for (const p of this.inst) {
+      if (!alive.has(p.uid)) continue;
+      let T = this.temps.get(p.uid);
+      let ex = 0;
+      if (q > 0 && uL) {
+        ex = clamp(1 - (pmax - p._proj) / (2 + 0.12 * len), 0.12, 1);
+        if (p.def.surf && p.n) ex = Math.max(ex * 0.6, Math.abs(p.n.dot(uL)) * 0.8);
+        if (!p.def.shield && smax > p._proj + 0.05) ex *= 0.15;
+      }
+      T += (q * ex - sb * (T * T * T * T - Tamb * Tamb * Tamb * Tamb)) / 4000 * dt;
+      T = Math.max(T, 4);
+      this.temps.set(p.uid, T);
+      const mt = maxTemp(p.def) * (p.def.bay && this.bayOpen ? 0.5 : 1), fr = T / mt;
+      if (fr > hot) { hot = fr; hotP = p; }
+      if (T > mt) { this.overheat(p); if (this.destroyed) return; }
+    }
+    this.heatMax = hot; this.heatPart = hotP;
+    if (hot > 0.85 && !this._heatWarned) { this._heatWarned = true; this.toast('⚠ ' + (hotP ? hotP.def.name : 'Part') + ' is overheating!', 2500); }
+    if (hot < 0.7) this._heatWarned = false;
+  }
+  overheat(p) {
+    if (p.kind === 'stack') { this.explode(this.r.clone(), Math.max(12, this.bounds.len)); this.crash(0, `${p.def.name} burned up during reentry (${Math.round(this.temps.get(p.uid))} K, limit ${maxTemp(p.def)} K). Use heat shields or tiles, enter shallower, or keep your nose pointed prograde.`); return; }
+    const gone = p.groupKey ? this.inst.filter(q => q.groupKey === p.groupKey && this.prop.alive.has(q.uid)) : [p];
+    for (const q of gone) { this.prop.alive.delete(q.uid); this.prop.active.delete(q.uid); const m = this.meshes.get(q.uid); if (m) m.visible = false; const pl = this.plumes.get(q.uid); if (pl) pl.visible = false; }
+    const off = p.com.clone().sub(this.com).applyQuaternion(this.q);
+    this.explode(this.r.clone().add(off), 4); AUDIO.boom(0.5);
+    this.toast('🔥 ' + p.def.name + ' overheated and broke off', 3000);
+    this.recomputeShape(false); this.refreshStages();
+  }
+  // ---------------- quicksave ----------------
+  quicksave() {
+    if (this.destroyed) { this.toast('Nothing to save'); return; }
+    const a = v => [v.x, v.y, v.z], P = this.prop;
+    const st = { v: 1, craft: this.craft, t: this.t, t0: this.t0, body: this.body.name, r: a(this.r), vel: a(this.v), q: [this.q.x, this.q.y, this.q.z, this.q.w], w: a(this.w), throttle: this.throttle,
+      sas: this.sas, sasMode: this.sasMode, customDir: this.customDir || null, next: P.next, alive: [...P.alive], fuel: [...P.fuel], active: [...P.active], chutes: [...P.chutes], spool: [...P.spool],
+      chuteState: [...this.chuteState], gearDown: this.gearDown, legsDown: this.legsDown, bayOpen: this.bayOpen, rcsOn: this.rcsOn, mono: [...this.mono], temps: [...this.temps],
+      landed: this.landed, contact: this.contact, padMode: this.padMode, stats: { maxAlt: this.stats.maxAlt, maxSpeed: this.stats.maxSpeed, visited: [...this.stats.visited] },
+      node: this.node ? { t: this.node.t, pro: this.node.pro, norm: this.node.norm, rad: this.node.rad } : null, saved: Date.now() };
+    try { localStorage.setItem('orbitforge.quicksave', JSON.stringify(st)); this.toast('Quicksaved (F5) · load with F9', 1800); AUDIO.click(); } catch (e) { this.toast('Quicksave failed: ' + e.message); }
+  }
+  quickload() {
+    let st; try { st = JSON.parse(localStorage.getItem('orbitforge.quicksave')); } catch (e) { }
+    if (!st || st.v !== 1) { this.toast('No quicksave yet (F5 saves)'); return; }
+    const b = BODIES.find(x => x.name === st.body); if (!b) { this.toast('Quicksave is from a mod world that is not loaded'); return; }
+    this.app.closeDialog(); if (this.app.mode !== 'flight') this.app.show('flight');
+    this.start(st.craft);
+    const P = this.prop;
+    P.next = st.next; P.alive = new Set(st.alive); P.fuel = new Map(st.fuel); P.active = new Set(st.active); P.chutes = new Set(st.chutes); P.spool = new Map(st.spool);
+    this.chuteState = new Map(st.chuteState); this.mono = new Map(st.mono); this.temps = new Map(st.temps);
+    for (const p of this.inst) if (!P.alive.has(p.uid)) { const m = this.meshes.get(p.uid); if (m) m.visible = false; }
+    this.body = b; this.t = st.t; this.t0 = st.t0;
+    this.recomputeShape(true); this.mass = P.mass();
+    this.r.fromArray(st.r); this.v.fromArray(st.vel); this.q.set(st.q[0], st.q[1], st.q[2], st.q[3]); this.w.fromArray(st.w);
+    this.throttle = st.throttle; this.sas = st.sas; this.sasMode = st.sasMode; this.customDir = st.customDir;
+    this.gearDown = st.gearDown; this.gearFrac = st.gearDown ? 1 : 0; this.legsDown = st.legsDown; this.legFrac = st.legsDown ? 1 : 0; this.bayOpen = st.bayOpen; this.rcsOn = st.rcsOn;
+    this.landed = st.landed; this.contact = st.contact; this.padMode = st.padMode;
+    this.stats = { maxAlt: st.stats.maxAlt, maxSpeed: st.stats.maxSpeed, visited: new Set(st.stats.visited) };
+    this.node = st.node ? Object.assign({ applied: new V3() }, st.node) : null;
+    this.updatePrediction(true); this.refreshStages(); this.buildPopovers();
+    this.toast('Quickloaded', 1500);
+  }
   // ---------------- maneuver nodes ----------------
   addNode() {
     if (!this.patches.length) return;
@@ -385,10 +567,12 @@ export class Flight {
 
   // ---------------- physics ----------------
   frame() { return horizonFrame(this.r); }
+  runwayEnds() { const R = HOME.radius, qr = bodyRot(HOME, this.t); const a = siteToWorld(RUNWAY.x, RUNWAY.z0, R).multiplyScalar(R).applyQuaternion(qr), b = siteToWorld(RUNWAY.x, RUNWAY.z1, R).multiplyScalar(R).applyQuaternion(qr); return { a, b, mid: a.clone().add(b).normalize().multiplyScalar(R), len: a.distanceTo(b) }; }
   groundVel(r, out) { return out.crossVectors(tmpC.set(0, this.body.rotRate, 0), r); }
   lowestAlt() {
     const R = this.body.radius; let lo = Infinity; const b = this.bounds;
-    if (this.gears.length && this.bodyPts) {
+    this._onLegs = false;
+    if (this.gears.length && this.bodyPts && !this.padMode) {
       for (const p of this.bodyPts) { tmpA.copy(p).sub(this.com).applyQuaternion(this.q).add(this.r); lo = Math.min(lo, tmpA.length() - R); }
       for (const g of this.gears) { if (!this.prop.alive.has(g.uid)) continue; tmpA.copy(g.tip).sub(this.com).applyQuaternion(this.q).add(this.r); lo = Math.min(lo, tmpA.length() - R); }
       return lo;
@@ -396,6 +580,12 @@ export class Flight {
     for (const y of [b.minY, b.maxY]) for (let k = 0; k < 6; k++) {
       const a = k / 6 * Math.PI * 2; tmpA.set(Math.cos(a) * b.maxR * 0.7, y, Math.sin(a) * b.maxR * 0.7).applyQuaternion(this.q).add(this.r);
       lo = Math.min(lo, tmpA.length() - R);
+    }
+    if (this.legs && this.legs.length && this.legFrac > 0.5) {
+      let lf = Infinity;
+      for (const p of this.legs) { if (!this.prop.alive.has(p.uid)) continue; this.legFoot(p, tmpB); tmpA.copy(tmpB).sub(this.com).applyQuaternion(this.q).add(this.r); lf = Math.min(lf, tmpA.length() - R); }
+      if (lf < lo + 0.05) this._onLegs = true;
+      lo = Math.min(lo, lf);
     }
     return lo;
   }
@@ -418,72 +608,172 @@ export class Flight {
     const map = { pro: d.pro, retro: d.pro && d.pro.clone().negate(), norm: d.norm, anti: d.norm && d.norm.clone().negate(), radOut: d.radOut, radIn: d.radOut && d.radOut.clone().negate(), node: d.node };
     return map[m] || null;
   }
-  // control input (pilot + SAS), returns per-axis command [-1,1] in local axes (x pitch, y roll, z yaw)
-  controlInput() {
+  // control feel: rockets steer pitch/yaw on the stick; planes steer pitch/roll (yaw on the twist buttons)
+  feel() {
+    const f = CTRL.feel; if (f === 'rocket' || f === 'plane') return f;
+    if (this.craft.kind === 'plane' && this.site !== 'pad') return 'plane';
+    if (this.winged && this.gears.length) { // shuttles: rocket feel while boosting upward, plane feel when gliding
+      if (this.padMode) return 'rocket';
+      const up = this.r.clone().normalize(), nz = Y.clone().applyQuaternion(this.q).dot(up);
+      return this._lastBurn && this._lastBurn.F > 0 && nz > 0.35 ? 'rocket' : 'plane';
+    }
+    return 'rocket';
+  }
+  // attitude error (local axis * angle) that rotates the current attitude onto quaternion qt
+  quatErr(qt) {
+    const qe = tmpQ.copy(this.q).invert().multiply(qt);
+    if (qe.w < 0) { qe.x = -qe.x; qe.y = -qe.y; qe.z = -qe.z; qe.w = -qe.w; }
+    const sa = Math.sqrt(Math.max(0, 1 - qe.w * qe.w)), ang = 2 * Math.acos(Math.min(1, qe.w));
+    return sa > 1e-9 ? new V3(qe.x / sa * ang, qe.y / sa * ang, qe.z / sa * ang) : new V3();
+  }
+  dirErr(target) { // point the nose at a world direction, roll left free
+    const dl = target.clone().applyQuaternion(tmpQ.copy(this.q).invert());
+    const ax = new V3().crossVectors(Y, dl); const s = ax.length(), c = Y.dot(dl);
+    const ang = Math.atan2(s, c);
+    const err = s > 1e-9 ? ax.multiplyScalar(ang / s) : new V3(c < 0 ? Math.PI : 0, 0, 0);
+    err.y = 0; return err;
+  }
+  // target attitude for winged flight: pitch above the horizon, bank (right wing down +), heading = current nose heading
+  planeAttitude(pitch, bank, hdg) {
+    const f = this.frame(), nose = Y.clone().applyQuaternion(this.q);
+    let h = hdg;
+    if (h === undefined) { const ne = nose.dot(f.east), nn = nose.dot(f.north); h = ne * ne + nn * nn > 0.02 ? Math.atan2(ne, nn) : (this._lastHdg || 0); }
+    this._lastHdg = h;
+    const hz = f.north.clone().multiplyScalar(Math.cos(h)).addScaledVector(f.east, Math.sin(h));
+    const n = f.up.clone().multiplyScalar(Math.sin(pitch)).addScaledVector(hz, Math.cos(pitch));
+    const sgn = new V3().crossVectors(f.east, f.up).dot(f.north) > 0 ? -1 : 1;
+    const r0 = new V3().crossVectors(n, f.up).normalize().multiplyScalar(sgn);
+    const l0 = new V3().crossVectors(r0, n).normalize(); if (l0.dot(f.up) < 0) l0.negate();
+    const right = r0.clone().multiplyScalar(Math.cos(bank)).addScaledVector(l0, -Math.sin(bank));
+    const lift = l0.clone().multiplyScalar(Math.cos(bank)).addScaledVector(r0, Math.sin(bank));
+    const m4 = new THREE.Matrix4().makeBasis(right.negate(), n, lift.negate());
+    return new Q().setFromRotationMatrix(m4);
+  }
+  pitchBank() {
+    const f = this.frame(), n = Y.clone().applyQuaternion(this.q), R = new V3(-1, 0, 0).applyQuaternion(this.q);
+    return { pitch: Math.asin(clamp(n.dot(f.up), -1, 1)), bank: Math.asin(clamp(-R.dot(f.up), -1, 1)) };
+  }
+  // pilot input + assist + SAS/autopilot -> per-axis command [-1,1] (x pitch, y roll, z yaw)
+  controlInput(dt = DT) {
+    dt = Math.min(dt, 0.1);
     const pb = this._lastBurn;
     let gimbal = 0;
-    if (pb) for (const u of pb.firing) { const p = this.prop.by.get(u); if (p.def.gimbal) gimbal += p.def.thrust * 1000 * (p.def.srb ? 1 : this.throttle) * Math.sin(p.def.gimbal * Math.PI / 180) * Math.abs(p.bot - this.com.y); }
+    if (pb) for (const u of pb.firing) { const p = this.prop.by.get(u); if (p.def.gimbal) gimbal += (pb.perF ? pb.perF[u] : p.def.thrust * 1000 * this.throttle) * Math.sin(p.def.gimbal * RAD) * Math.max(0.5, Math.abs(p.bot - this.com.y)); }
+    this.gimCap = gimbal;
+    const W = this.torque + (this.rcsOn && this.monoLeft > 0 ? this.rcsTorque : 0);
+    this.wheelT = W;
     const ca = this.ctrlAuth || [0, 0, 0];
-    this.alphaAct = [clamp((this.torque + gimbal) / this.Ip, 0.03, 5), clamp((this.torque + gimbal * 0.15) / this.Ir, 0.03, 5), clamp((this.torque + gimbal) / this.Ip, 0.03, 5)];
-    const alpha = [clamp((this.torque + gimbal + ca[0]) / this.Ip, 0.03, 8), clamp((this.torque + gimbal * 0.15 + ca[1]) / this.Ir, 0.03, 8), clamp((this.torque + gimbal + ca[2]) / this.Ip, 0.03, 8)];
-    const k = this.keys;
-    // W = nose down (+x), E = roll right (+y), D = yaw right (+z)
-    const uin = [
-      (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0) - this.joyV.y,
-      (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0) + this.rollIn,
-      (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) + this.joyV.x,
-    ].map(x => clamp(x, -1, 1));
-    if (this.isPlane) { // planes: stick left/right banks in the air, steers on the ground
-      const yx = this.joyV.x, onG = this.contact;
-      uin[2] = clamp((k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) + yx * (onG ? 1 : 0.3), -1, 1);
-      uin[1] = clamp((k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0) + this.rollIn + (onG ? 0 : yx * 0.85), -1, 1);
-    }
-    if (this.testInput) for (let i = 0; i < 3; i++) uin[i] = this.testInput[i];
+    this.alphaAct = [(W + gimbal) / this.Ip, (W + gimbal * 0.15) / this.Ir, (W + gimbal) / this.Ip];
+    const alpha = [clamp((W + gimbal + ca[0]) / this.Ip, 0.03, 80), clamp((W + gimbal * 0.15 + ca[1]) / this.Ir, 0.03, 80), clamp((W + gimbal + ca[2]) / this.Ip, 0.03, 80)];
+    this.alphaEst = alpha;
+    const k = this.keys, fine = this.fine;
+    const feel = this._feel = this.feel(), planeFeel = feel === 'plane';
+    // keyboard (eased) — W = nose down (+x), E = roll right (+y), D = yaw right (+z)
+    const kt = [(k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0), (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0), (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0)];
+    if (this.trnMode) { kt[0] = kt[1] = kt[2] = 0; }
+    const kr = this.keyRamp || (this.keyRamp = [0, 0, 0]);
+    for (let i = 0; i < 3; i++) kr[i] = easeKey(kr[i], kt[i], dt, fine);
+    // stick + tilt (shaped)
+    const jx = this.trnMode ? 0 : shapeStick(clamp(this.joyV.x + (TILT.on ? TILT.x : 0), -1, 1)), jy = this.trnMode ? 0 : shapeStick(clamp(this.joyV.y - (TILT.on ? TILT.y : 0), -1, 1));
+    const twist = this.trnMode ? 0 : this.rollIn;
+    const onG = this.contact;
+    let uin;
+    if (planeFeel) uin = [kr[0] - jy, kr[1] + (onG ? 0 : jx), kr[2] + twist + (onG ? jx : 0)];
+    else uin = [kr[0] - jy, kr[1] + twist, kr[2] + jx];
+    uin = uin.map(x => clamp(x, -1, 1));
+    if (this.testInput) uin = this.testInput.slice();
     this.uin = uin;
-    const anyIn = uin.some(x => Math.abs(x) > 0.05);
-    const u = uin.slice();
-    if (this.sas) {
-      const w = this.w;
-      let err = null;
+    const scale = fine ? 0.3 : 1;
+    const active = uin.map(x => Math.abs(x) > 0.02), anyIn = active.some(a => a);
+    if (anyIn) this._pilotT = this.t;
+    const u = [0, 0, 0];
+    const assist = CTRL.assist !== false;
+    const integ = this.integ || (this.integ = [0, 0, 0]);
+    // ---- attitude target: autopilot > SAS mode > hold ----
+    let err = null, ff = null;
+    const aeroFly = this.winged && !onG && this.q_dyn > 200;
+    const apt = this.ap && this.ap.active ? this.ap.target : null;
+    if (apt) { err = apt.q ? this.quatErr(apt.q) : apt.dir ? this.dirErr(apt.dir) : null; if (anyIn && this.ap.onPilot) this.ap.onPilot(); }
+    else if (this.sas) {
       const target = this.sasTarget();
-      if (target) {
-        const dl = target.clone().applyQuaternion(tmpQ.copy(this.q).invert());
-        const ax = new V3().crossVectors(Y, dl); const s = ax.length(), c = Y.dot(dl);
-        const ang = Math.atan2(s, c);
-        err = s > 1e-9 ? ax.multiplyScalar(ang / s) : new V3(c < 0 ? Math.PI : 0, 0, 0);
-        err.y = 0;
-        if (this.isPlane && this.sasMode === 'custom') { // keep the wings level
-          const up = this.r.clone().normalize(), right = new V3(-1, 0, 0).applyQuaternion(this.q), dors = new V3(0, 0, -1).applyQuaternion(this.q);
-          err.y = Math.atan2(right.dot(up), Math.max(0.05, dors.dot(up))) * 0.8;
+      if (this.isPlane && this.sasMode === 'custom' && this.customDir && !onG) { // planes: fly to a pitch/heading by banking
+        const f = this.frame(), vs = this.v.clone().sub(this.groundVel(this.r, new V3()));
+        const nz = Y.clone().applyQuaternion(this.q), tr = Math.atan2(nz.dot(f.east), nz.dot(f.north)), he = Math.atan2(Math.sin(this.customDir.hdg * RAD - tr), Math.cos(this.customDir.hdg * RAD - tr));
+        const bank = clamp(Math.atan(Math.max(vs.length(), 30) * (he / 5) / 9.81), -0.65, 0.65);
+        err = this.quatErr(this.planeAttitude(this.customDir.pitch * RAD, bank));
+      } else if (target) err = this.dirErr(target);
+      else {
+        // stability hold: after the pilot lets go, damp the rotation first, then lock the attitude it settled at (no snap-back)
+        if (anyIn || (this.isPlane && onG)) { this.holdQ = this.holdPB = null; this.holdPB = null; }
+        if (!this.holdQ && !this.holdPB && !anyIn) {
+          const wl = this.w.length();
+          if ((this.isPlane && onG) || wl < 0.03 || this.t - (this._pilotT || -99) > 2.5) {
+            if (aeroFly && planeFeel) { const pb = this.pitchBank(); this.holdPB = { pitch: pb.pitch, bank: Math.abs(pb.bank) < 0.06 ? 0 : pb.bank }; } // planes: keep pitch + bank, let the heading turn
+            else this.holdQ = this.q.clone();
+          }
         }
-      } else {
-        if (anyIn || !this.holdQ || (this.isPlane && this.contact)) this.holdQ = this.q.clone();
-        const qe = this.q.clone().invert().multiply(this.holdQ);
-        if (qe.w < 0) { qe.x = -qe.x; qe.y = -qe.y; qe.z = -qe.z; qe.w = -qe.w; }
-        const sa = Math.sqrt(1 - Math.min(1, qe.w * qe.w)), ang = 2 * Math.acos(Math.min(1, qe.w));
-        err = sa > 1e-9 ? new V3(qe.x / sa * ang, qe.y / sa * ang, qe.z / sa * ang) : new V3();
+        if (this.holdPB) err = this.quatErr(this.planeAttitude(this.holdPB.pitch, this.holdPB.bank));
+        else if (this.holdQ) err = this.quatErr(this.holdQ);
       }
-      const e = [err.x, err.y, err.z], wv = [w.x, w.y, w.z];
-      for (let i = 0; i < 3; i++) {
-        if (Math.abs(uin[i]) > 0.05) continue;
-        const ae = Math.abs(e[i]);
-        const wdes = Math.sign(e[i]) * Math.min(Math.sqrt(1.2 * alpha[i] * ae), 3.5 * ae, 1.0);
-        u[i] = clamp((wdes - wv[i]) / (alpha[i] * 0.12), -1, 1);
-      }
+    }
+    // winged flight: feed forward the turn rate of a coordinated banked turn so the loop doesn't fight the turn
+    if (err && aeroFly) {
+      const f = this.frame(), vsp = Math.max(30, this.v.clone().sub(this.groundVel(this.r, new V3())).length()), pb = this.pitchBank();
+      const psi = 9.81 * Math.tan(clamp(pb.bank, -1.2, 1.2)) / vsp;
+      ff = f.up.clone().multiplyScalar(-psi).applyQuaternion(tmpQ.copy(this.q).invert());
+    }
+    const steer = !!(err || this.sas || assist);
+    const wv = [this.w.x, this.w.y, this.w.z];
+    const base = planeFeel ? [0.7, 1.5, 0.35] : [0.55, 1.1, 0.55];
+    const tau = planeFeel && this.q_dyn > 200 ? 0.2 : 0.12, dn = this.aeroDampN || [0, 0, 0];
+    for (let i = 0; i < 3; i++) {
+      const a = alpha[i];
+      // max commanded rate: what the craft can stop from within ~7 degrees, times the sensitivity setting
+      const wmax = Math.min(base[i] * CTRL.sens, Math.sqrt(2 * a * 0.12) * Math.max(0.7, CTRL.sens)) * scale;
+      let wc = null;
+      const pa = this._act || (this._act = [false, false, false]);
+      if (planeFeel && pa[i] && !active[i]) integ[i] = 0; // planes: drop the stick-held trim when the pilot lets go
+      pa[i] = active[i];
+      if (active[i]) {
+        if (!assist) { u[i] = uin[i] * scale; integ[i] *= 0.9; continue; }
+        wc = uin[i] * wmax;
+      } else if (err) {
+        const e = [err.x, err.y, err.z][i], ae = Math.abs(e);
+        const wsas = Math.max(Math.min(base[i] * 1.6, Math.sqrt(2 * a * 0.3)) * (fine ? 0.5 : 1), 0.05);
+        const dec = planeFeel ? 0.55 : 0.75; // use 75% of the turning authority to brake, so the stop lands on target
+        wc = Math.sign(e) * Math.min(Math.sqrt(2 * dec * a * ae), (planeFeel ? 1.1 : 1.4) * ae, wsas);
+        if (ff) wc += [ff.x, ff.y, ff.z][i];
+      } else if (steer) wc = 0;
+      if (wc === null) { u[i] = 0; integ[i] *= 0.9; continue; }
+      const re = wc - wv[i];
+      // PI rate loop. Gain includes the aerodynamic damping so planes hold a rate as firmly as rockets in vacuum.
+      let kp = (1 + Math.min(dn[i] * tau, 1.5)) / (a * tau);
+      if (this.winged && this.q_dyn > 200 && i !== 1) kp = Math.max(kp, 1.2 / Math.max(0.2, base[i] * CTRL.sens)); // pitch/yaw are held by aero stiffness, not inertia: they need a firmer rate loop // aero stiffness: make sure the surfaces actually move
+      let ui = re * kp + integ[i];
+      if (Math.abs(ui) < 1 || Math.sign(re) !== Math.sign(integ[i])) integ[i] = clamp(integ[i] + re * kp * dt / 0.6, -0.8, 0.8);
+      u[i] = clamp(ui, -1, 1);
     }
     return u;
   }
   rotIntegrate(dt, u, aero, extT) {
-    const a = this.alphaAct;
-    this.w.x += (u[0] * a[0] + (aero ? aero.x : 0) + (extT ? extT.x / this.Ip : 0)) * dt;
-    this.w.y += (u[1] * a[1] + (aero ? aero.y || 0 : 0) + (extT ? extT.y / this.Ir : 0)) * dt;
-    this.w.z += (u[2] * a[2] + (aero ? aero.z : 0) + (extT ? extT.z / this.Ip : 0)) * dt;
+    // control torque: reaction wheels + engine gimbal. The gimbal first trims any off-centre thrust torque (thrT), then steers with what is left.
+    const W = this.wheelT || 0, G = this.gimCap || 0, T = this.thrT, I = [this.Ip, this.Ir, this.Ip], Gx = [G, G * 0.15, G];
+    const acc = [0, 0, 0], tt = T ? [T.x, T.y, T.z] : [0, 0, 0];
+    for (let i = 0; i < 3; i++) {
+      const g = Gx[i] > 0 ? clamp(u[i] - tt[i] / Gx[i], -1, 1) : 0;
+      let tq = u[i] * W + g * Gx[i] + tt[i];
+      if (W + Gx[i] < 0.03 * I[i]) tq += u[i] * 0.03 * I[i];
+      acc[i] = tq / I[i];
+    }
+    this.w.x += (acc[0] + (aero ? aero.x : 0) + (extT ? extT.x / this.Ip : 0)) * dt;
+    this.w.y += (acc[1] + (aero ? aero.y || 0 : 0) + (extT ? extT.y / this.Ir : 0)) * dt;
+    this.w.z += (acc[2] + (aero ? aero.z : 0) + (extT ? extT.z / this.Ip : 0)) * dt;
     if (aero && aero.damp) { const f = 1 / (1 + aero.damp * dt); this.w.x *= f; this.w.z *= f; }
     if (this.w.length() > 3) this.w.setLength(3);
     const wl = this.w.length();
     if (wl > 1e-9) { tmpQ.setFromAxisAngle(tmpA.copy(this.w).divideScalar(wl), wl * dt); this.q.multiply(tmpQ).normalize(); }
   }
-  rotStep(dt, aero) { const u = this.controlInput(); this.rotIntegrate(dt, u, aero); }
+  rotStep(dt, aero) { const u = this.controlInput(dt); this.thrT = null; this.rotIntegrate(dt, u, aero); }
   // lift/drag of one surface; vp = surface velocity through the air (local), n = surface normal (local)
   surfForce(S, vp, n, rho, mach, rr, outF, outT) {
     const sp = vp.length(); if (sp < 0.3) return;
@@ -499,14 +789,16 @@ export class Flight {
     outF.add(f); if (outT) outT.add(new V3().crossVectors(rr, f));
   }
   surfaceAero(vsl, rho, mach, u, dt) {
-    const F = new V3(), T = new V3(), auth = [0, 0, 0];
-    const alive = this.prop.alive;
+    const F = new V3(), T = new V3(), auth = [0, 0, 0], D = [0, 0, 0], ex = new V3();
+    const alive = this.prop.alive, sp0 = vsl.length();
     const rr = new V3(), vp = new V3(), n = new V3(), Tp = new V3(), Tm = new V3(), dum = new V3();
     for (const s of this.surfs) {
       if (!alive.has(s.uid)) continue;
       rr.copy(s.com).sub(this.com);
       vp.crossVectors(this.w, rr).add(vsl);
       const sf = s.def.surf;
+      // rotational damping of this surface (torque per rad/s), used to tune the steering loop
+      for (let i = 0; i < 3; i++) { ex.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0).cross(rr); const c = s.n.dot(ex); D[i] += 0.5 * rho * sp0 * sf.area * 5.4 * c * c; }
       let target = 0;
       if (sf.ctrl) {
         const d0 = 0.1;
@@ -522,7 +814,7 @@ export class Flight {
       n.copy(s.n).multiplyScalar(Math.cos(s.delta)).addScaledVector(Y, -Math.sin(s.delta));
       this.surfForce(sf.area, vp, n, rho, mach, rr, F, T);
     }
-    this.ctrlAuth = auth;
+    this.ctrlAuth = auth; this.aeroDampN = [D[0] / this.Ip, D[1] / this.Ir, D[2] / this.Ip];
     return { F, T };
   }
   // landing gear: spring-damper wheels with rolling, braking, side friction and nose-wheel steering
@@ -573,9 +865,25 @@ export class Flight {
     const mach = vsm / 340;
     // engines
     this.prop._env = { rho: atm.rho, mach };
+    if (this.ap && this.ap.active) this.ap.step(dt);
     const burn = this.prop.burn(this.throttle, atm.p, dt, this.prop._env);
     this._lastBurn = burn;
     if (burn.F > 0) this.mass = this.prop.mass();
+    // thrust that does not pass through the centre of mass makes a torque (the gimbal trims it in rotIntegrate)
+    this.thrT = null;
+    if (burn.F > 0) {
+      const T = new V3();
+      for (const u of burn.firing) {
+        const p = this.prop.by.get(u), f = burn.perF[u] || 0;
+        let ox = p.pos.x - this.com.x, oz = p.pos.z - this.com.z;
+        if (p.def.cant) { // canted mounts: the engine bells aim the thrust line through the centre of mass (up to def.cant degrees)
+          const lev = Math.max(0.5, Math.abs(this.com.y - p.pos.y)), tm = Math.tan(p.def.cant * RAD);
+          ox -= lev * clamp(ox / lev, -tm, tm); oz -= lev * clamp(oz / lev, -tm, tm);
+        }
+        T.x += -oz * f; T.z += ox * f;
+      }
+      this.thrT = T;
+    }
     const nose = Y.clone().applyQuaternion(this.q);
     const acc = r.clone().multiplyScalar(-b.mu / (rm * rm * rm));
     const thrA = burn.F / this.mass;
@@ -596,7 +904,8 @@ export class Flight {
       cs.frac += (target - cs.frac) * Math.min(1, dt * 0.9);
       chuteA += cs.frac * 560; chuteN += cs.frac;
     }
-    const u = this.controlInput();
+    const u = this._u = this.controlInput(dt);
+    this.rcsStep(dt, u, acc);
     // aero
     let aero = null;
     if (atm.rho > 0 && vsm > 0.5) {
@@ -606,7 +915,7 @@ export class Flight {
       const sin2 = 1 - Math.pow(clamp(vdl.y, -1, 1), 2);
       this.q_dyn = qdyn;
       if (this.surfAero) {
-        const CdA = this.area * (this.cd0 * 0.6 + 0.8 * sin2 + waveCd(mach)) + chuteA;
+        const CdA = this.area * (this.cd0 * 0.6 + 0.8 * sin2 + waveCd(mach)) + chuteA + (this.brakes ? 1.5 + this.wingArea * 0.07 : 0) + (this.dragChute && this.contact ? 28 : 0) + (this.bayOpen ? 2 : 0);
         acc.addScaledVector(vs, -0.5 * atm.rho * vsm * CdA / this.mass);
         const sa = this.surfaceAero(vs.clone().applyQuaternion(qi), atm.rho, mach, u, dt);
         acc.addScaledVector(sa.F.applyQuaternion(this.q), 1 / this.mass);
@@ -620,15 +929,18 @@ export class Flight {
         const ax = new V3().crossVectors(Y, vdl).multiplyScalar(qdyn * this.area * L * stab / this.Ip);
         if (chuteN > 0.02) ax.add(new V3().crossVectors(Y, vdl.clone().negate()).multiplyScalar(qdyn * Math.min(chuteA, 60) * L * 0.5 / this.Ip));
         aero = { x: ax.x, z: ax.z, damp: Math.min(20, qdyn * this.area * L * L * (0.3 + 0.5 * this.fins) / this.Ip * 0.5 + chuteN * 2) };
+        this.aeroDampN = [aero.damp, 0, aero.damp];
       }
-    } else { this.q_dyn = 0; this.ctrlAuth = [0, 0, 0]; }
+    } else { this.q_dyn = 0; this.ctrlAuth = [0, 0, 0]; this.aeroDampN = null; }
+    this.heatStep(dt, atm, vs, vsm);
+    if (this.destroyed) return;
     // wheels
-    this.steer = clamp(this.uin ? this.uin[2] : 0, -1, 1); // nose-wheel steering follows the pilot only (SAS steering oscillates on the ground)
+    this.steer = clamp((this.uin ? this.uin[2] : 0) + (this.apSteer || 0), -1, 1); // nose-wheel steering follows the pilot only (SAS steering oscillates on the ground)
     const wr = this.gears.length ? this.wheels(dt, u, vs) : null;
     if (wr) acc.addScaledVector(wr.F, 1 / this.mass);
     // rotation (rockets sitting on the ground keep their attitude locked)
     const weight = b.mu / (rm * rm) * this.mass;
-    if (this.contact && !this.gears.length && burn.F < weight * 1.02) {
+    if (this.contact && (!this.gears.length || this.padMode) && burn.F < weight * 1.02) {
       this.w.set(0, 0, 0);
       tmpQ.setFromAxisAngle(Y, b.rotRate * dt); this.q.premultiply(tmpQ);
     } else this.rotIntegrate(dt, u, aero, wr ? wr.T : null);
@@ -636,6 +948,7 @@ export class Flight {
     v.addScaledVector(acc, dt); r.addScaledVector(v, dt);
     this.t += dt;
     this.groundContact(dt);
+    if (this.padMode && (!this.contact && this.t - this.t0 > 3 || this.lowestAlt() > 25)) this.padMode = false;
     this.checkSOI();
     if (burn.firing.length === 0 && this.prop.active.size && this.throttle > 0 && !this._flameoutWarned) { this._flameoutWarned = true; this.toast(this.isPlane && [...this.prop.active].some(u => this.prop.by.get(u).def.air) ? 'Flameout: not enough air (or fuel)' : 'Flameout: stage when ready'); }
     if (burn.firing.length) this._flameoutWarned = false;
@@ -643,14 +956,15 @@ export class Flight {
   }
   groundContact(dt) {
     if (this.destroyed) return;
-    if (this.gears.length) return this.planeContact(dt);
+    if (this.gears.length && !this.padMode) return this.planeContact(dt);
     const lo = this.lowestAlt();
     if (lo < 0) {
       const up = this.r.clone().normalize();
       const vg = this.groundVel(this.r, new V3());
       const vrel = this.v.clone().sub(vg);
       const sp = vrel.length();
-      if (!this.contact && sp > CRASH_SPEED) { this.crash(sp); return; }
+      const lim = this._onLegs ? LEG_CRASH : CRASH_SPEED;
+      if (!this.contact && sp > lim) { this.crash(sp); return; }
       this.r.addScaledVector(up, -lo);
       const vn = vrel.dot(up);
       if (vn < 0) vrel.addScaledVector(up, -vn);
@@ -701,15 +1015,16 @@ export class Flight {
     this.toast('Entering sphere of influence: ' + nb.name);
     this.updatePrediction(true);
   }
-  crash(speed) {
-    this.destroyed = true; this.root.visible = false;
+  crash(speed, why) {
+    this.destroyed = true; this.root.visible = false; AUDIO.boom(); MODS.emit('crash', this);
+    if (this.ap) this.ap.off(true);
     for (const pl of this.plumes.values()) pl.visible = false;
     this.explode(this.r.clone(), Math.max(12, this.bounds.len));
     this.warpIdx = 0;
     setTimeout(() => {
       if (!this.destroyed || this.ended) return;
       this.ended = true;
-      this.app.dialog('Vessel destroyed', [['Revert to launch', () => this.start(this.craft)], ['Back to builder', () => this.app.toBuilder()]], `<p>Impact at ${speed.toFixed(1)} m/s on ${this.body.name}. Crash tolerance is ${CRASH_SPEED} m/s.</p>`);
+      this.app.dialog('Vessel destroyed', [['Revert to launch', () => this.start(this.craft)], ['Back to builder', () => this.app.toBuilder()]], why ? `<p>${why}</p>` : `<p>Impact at ${speed.toFixed(1)} m/s on ${this.body.name}. Crash tolerance is ${CRASH_SPEED} m/s (${LEG_CRASH} m/s on deployed landing legs).</p>`);
     }, 1800);
   }
   explode(pos, size) {
@@ -784,12 +1099,13 @@ export class Flight {
     const k = this.keys;
     if (k.ShiftLeft || k.ShiftRight) this.setThrottle(this.throttle + dtReal * 0.7);
     if (k.ControlLeft || k.ControlRight) this.setThrottle(this.throttle - dtReal * 0.7);
+    if (this.ap && this.ap.active) this.ap.tick();
     const railsOK = this.canRails();
     if (this.warpMode === 'rails' && this.warpIdx > 0 && !railsOK) { this.warpIdx = 0; this.toast('Warp stopped'); }
     if (this.warpMode === 'phys' && this.warpIdx > 0 && railsOK && !this.landed) { /* allow phys warp in space too */ }
     const W = this.warpFactor();
     if (this.warpMode === 'rails' && W > 1) { this.railsAdvance(dtReal * W, false); this._lastBurn = null; }
-    else if (railsOK && !this.contact && !this.landed) { this.railsAdvance(dtReal * (this.warpMode === 'phys' ? W : 1), true); this._lastBurn = null; this.acc = 0; }
+    else if (railsOK && !this.contact && !this.landed && !(this.ap && this.ap.active)) { this.railsAdvance(dtReal * (this.warpMode === 'phys' ? W : 1), true); this._lastBurn = null; this.acc = 0; }
     else {
       this.acc += dtReal * (this.warpMode === 'phys' ? W : 1);
       let n = 0;
@@ -809,6 +1125,8 @@ export class Flight {
   update(dt) {
     this.advance(dt);
     this.updateVisuals(dt);
+    AUDIO.update(this, dt);
+    MODS.emit('update', dt, this);
     this.hudTimer = (this.hudTimer || 0) - dt;
     if (this.hudTimer <= 0) { this.updateHUD(); this.hudTimer = 0.1; }
   }
@@ -828,6 +1146,15 @@ export class Flight {
     // aircraft moving parts
     for (const s of this.surfs) { const m = this.meshes.get(s.uid); if (m && m.userData.flap) m.userData.flap.rotation.x = s.delta; }
     for (const g of this.gears) { const m = this.meshes.get(g.uid); if (!m || !m.userData.strut) continue; m.userData.strut.rotation.z = (1 - this.gearFrac) * 1.5; if (m.userData.wheel) m.userData.wheel.rotation.x = g.steerAng || 0; }
+    this.legFrac = clamp(this.legFrac + (this.legsDown ? 1 : -1) * dt * 0.8, 0, 1);
+    for (const p of this.legs) { const m = this.meshes.get(p.uid); if (m && m.userData.leg) m.userData.leg.rotation.z = 2.95 - 2.35 * this.legFrac; }
+    this.bayFrac = clamp(this.bayFrac + (this.bayOpen ? 1 : -1) * dt * 0.4, 0, 1);
+    for (const p of this.bays) { const m = this.meshes.get(p.uid); if (m && m.userData.doors) for (const d of m.userData.doors) d.rotation.y = -d.userData.sd * this.bayFrac * 1.95; }
+    for (const p of this.rcsBlocks) if (p.puff) { const on = this._rcsFire > 0 && this.prop.alive.has(p.uid) && !this.destroyed; p.puff.visible = on && Math.random() < 0.8; if (on) p.puff.scale.setScalar(0.6 + Math.random() * 0.8); }
+    // reentry plasma: glowing cap on the upstream side
+    { const q = this.heatFlux || 0, op = clamp((q - 6e4) / 3e5, 0, 0.8);
+      this.plasma.visible = op > 0.01 && !this.destroyed && !!this._heatDir;
+      if (this.plasma.visible) { const u = this._heatDir, R = Math.max(1.2, this.bounds.maxR * 1.3); this.plasma.position.copy(u).multiplyScalar((this._heatFront || 0) + 0.4); this.plasma.quaternion.setFromUnitVectors(Y, u); this.plasma.scale.set(R, R * (1 + op), R); this.plasma.material.opacity = op * (0.85 + Math.random() * 0.3); this.plasma.material.color.setHSL(0.06 - op * 0.03, 1, 0.55); } }
     // plumes
     const atm = atmosphere(this.body, this.r.length() - this.body.radius);
     const firing = new Set(this._lastBurn ? this._lastBurn.firing : (this.thrusting() ? this.prop.burn(this.throttle, atm.p, 0).firing : []));
@@ -957,7 +1284,8 @@ export class Flight {
     const ap = grounded ? NaN : el0.ecc < 1 ? el0.ra - b.radius : Infinity, pe = grounded ? NaN : el0.rp - b.radius;
     const apS = isNaN(ap) ? '—' : isFinite(ap) ? fmtDist(ap) : '∞', peS = isNaN(pe) ? '—' : fmtDist(pe);
     const showRadar = situ === 'Flying' || situ === 'Landed' || situ === 'On ground' || radar < 3000;
-    this.hudMain.innerHTML = `<span class="alt">${fmtDist(showRadar && radar < 3000 ? Math.max(0, radar) : alt)}</span><span class="lab">${showRadar && radar < 3000 ? 'RADAR' : 'ALT'}</span>` +
+    const hp = Math.round((this.heatMax || 0) * 100);
+    this.hudMain.innerHTML = `<span class="alt">${fmtDist(showRadar && radar < 3000 ? Math.max(0, radar) : alt)}</span><span class="lab">${showRadar && radar < 3000 ? 'RADAR' : 'ALT'}</span>` + (hp >= 45 ? `<span class="heat${hp >= 80 ? ' warn' : ''}">🔥${hp}%</span>` : '') +
       (this.app.W < 520 && !this.hudOpen ? '' : `<span class="sep"></span><span class="lab">Ap</span><b>${apS}</b><span class="lab">Pe</span><b>${peS}</b>`) + `<i class="chev">${this.hudOpen ? '▴' : '▾'}</i>`;
     if (this.hudOpen) {
       if ((this._dvT = (this._dvT || 0) - 1) <= 0) { this._dvCache = dvRemaining(this.prop).toFixed(0); this._dvT = 8; }
@@ -965,6 +1293,7 @@ export class Flight {
         <div>Ap <b>${apS}</b> ${!grounded && el0.ecc < 1 && isFinite(el0.tAp) ? 'in ' + fmtTime(el0.tAp) : ''} · Pe <b>${peS}</b> ${!grounded && isFinite(el0.tPe) && el0.tPe > 0 ? 'in ' + fmtTime(el0.tPe) : ''}</div>
         <div>ALT ${fmtDist(alt)} · V/S ${vvert.toFixed(1)} m/s${this.isPlane ? ` · Mach ${(vs.length() / 340).toFixed(2)}${this.aoa !== undefined && this.q_dyn > 50 ? ' · AoA ' + this.aoa.toFixed(1) + '°' : ''}` : ''}</div>
         <div>MET ${fmtTime(this.t - this.t0)} · Δv ${this._dvCache} m/s · ${(this.mass / 1000).toFixed(2)} t</div>
+        <div>Hottest: ${this.heatPart ? this.heatPart.def.name + ' ' + Math.round(this.temps.get(this.heatPart.uid)) + ' K (' + hp + '%)' : '—'}${this.rcsBlocks.length ? ` · RCS ${this.rcsOn ? 'ON' : 'off'} ${(this.monoLeft * 1000).toFixed(0)} kg` : ''}</div>
         ${this.isPlane ? `<div>${this.engineInfo()}</div>` : ''}`;
     }
     this.speedEl.innerHTML = `<small>${this.navFrame === 'surface' ? 'SURFACE' : 'ORBIT'}${this.navMode !== 'auto' ? '•' : ''}</small><b>${spd.toFixed(1)}</b><small>m/s</small>`;
@@ -974,7 +1303,14 @@ export class Flight {
     this.sasBtn.classList.toggle('on', this.sas);
     this.sasModeBtn.textContent = this.modeGlyph[this.sasMode] || '◎';
     this.sasModeBtn.classList.toggle('on', this.sas && this.sasMode !== 'stab');
-    for (const k in this.sasBtns) this.sasBtns[k].classList.toggle('on', this.sas && this.sasMode === k);
+    for (const k in this.sasBtns) this.sasBtns[k].classList.toggle('on', this.sas && this.sasMode === k && !this.ap.active);
+    for (const k in this.apBtns || {}) this.apBtns[k].classList.toggle('on', this.ap.active && this.ap.mode === k);
+    this.apChip.classList.toggle('hidden', !this.ap.active);
+    if (this.ap.active) this.apChip.innerHTML = `<b>AP</b> ${this.ap.status()} <i>✕</i>`;
+    this.sasBtn.classList.toggle('ap', this.ap.active);
+    const rl = this.trnMode ? ['▼', '▲'] : this._feel === 'plane' ? ['◁', '▷'] : ['⟲', '⟳'];
+    if (this.rollBtns[0].textContent !== rl[0]) { this.rollBtns[0].textContent = rl[0]; this.rollBtns[1].textContent = rl[1]; this.rollBtns.forEach(b => b.title = this.trnMode ? 'RCS back / forward' : this._feel === 'plane' ? 'Yaw (rudder)' : 'Roll'); }
+    if (this._feelShown !== this._feel) { if (this._feelShown && this.t - this.t0 > 2) this.toast(this._feel === 'plane' ? 'Plane controls: stick = pitch + roll, ◁ ▷ = yaw' : 'Rocket controls: stick = pitch + yaw, ⟲ ⟳ = roll', 2500); this._feelShown = this._feel; }
     if (this.gears.length) { this.gearBtn.classList.toggle('on', this.gearDown); this.gearBtn.textContent = this.gearDown ? 'GEAR▼' : 'GEAR▲'; this.brkBtn.classList.toggle('on', this.brakes); }
     this.recoverBtn.classList.toggle('hidden', !(this.landed && b === HOME && !this.destroyed && !this.ended && (this.prop.next > 0 || this.stats.maxAlt > 30)));
     // node HUD
@@ -1017,8 +1353,13 @@ export class Flight {
     if (!down) { if (e.code === 'KeyB' && !this._brkLatch) this.brakes = false; return; }
     switch (e.code) {
       case 'Space': this.doStage(); e.preventDefault(); break;
-      case 'KeyT': this.toggleSAS(); break;
-      case 'KeyG': if (this.gears.length) this.toggleGear(); break;
+      case 'KeyT': this.ap.off(); this.toggleSAS(); break;
+      case 'KeyG': this.toggleGear(); break;
+      case 'KeyR': this.toggleRCS(); break;
+      case 'KeyO': this.toggleBay(); break;
+      case 'CapsLock': this.setFine(!this.fine); break;
+      case 'F5': this.quicksave(); e.preventDefault(); break;
+      case 'F9': this.quickload(); e.preventDefault(); break;
       case 'KeyB': this.brakes = true; break;
       case 'KeyM': this.toggleMap(); break;
       case 'Period': this.warp(1); break;
@@ -1070,6 +1411,7 @@ export class Flight {
       },
       point(pitch, hdg) { F.sas = true; F.sasMode = 'custom'; F.customDir = { pitch, hdg }; },
       sas(mode) { F.setSAS(mode); },
+      ap(mode, opts) { if (opts) Object.assign(F.ap, opts); if (mode) F.ap.engage(mode); else F.ap.off(); return F.ap.status(); },
       throttle(x) { F.setThrottle(x); },
       stage() { F.doStage(); },
       simulate(sec) { const n = Math.round(sec / DT); for (let i = 0; i < n && !F.destroyed; i++) F.advance(DT); return this.status(); },
@@ -1078,6 +1420,16 @@ export class Flight {
         F.updatePrediction(true); return this.status();
       },
       node(t, pro, norm, rad) { F.node = { t, pro, norm, rad, applied: new V3() }; F.updatePrediction(true); return this.status(); },
+      // test hook: put a winged craft in level flight on the runway's extended centreline, D m before the threshold, h m up, at v m/s
+      place({ D = 20000, h = 3000, v = 200, end = 'a', cross = 0 } = {}) {
+        const rw = F.runwayEnds(), thr = end === 'a' ? rw.a : rw.b, oth = end === 'a' ? rw.b : rw.a, up = thr.clone().normalize();
+        const flat = x => x.clone().addScaledVector(up, -x.dot(up)); const dir = flat(oth.clone().sub(thr)).normalize(), side = new V3().crossVectors(up, dir).normalize();
+        F.body = HOME; F.r.copy(thr).addScaledVector(dir, -D).addScaledVector(side, cross).normalize().multiplyScalar(HOME.radius + h);
+        const f = F.frame(); const hd = Math.atan2(dir.dot(f.east), dir.dot(f.north));
+        F.v.copy(dir).multiplyScalar(v).add(F.groundVel(F.r, new V3()));
+        F.q.copy(F.planeAttitude(0.05, 0, hd)); F.w.set(0, 0, 0);
+        F.landed = false; F.contact = false; F.padMode = false; F.gearDown = false; F.gearFrac = 0; F.warpIdx = 0; F.holdQ = F.holdPB = null; F.updatePrediction(true); return this.status();
+      },
       setOrbit(name, alt, ang = 0) {
         const b = BODIES.find(x => x.name === name); const rr = b.radius + alt, vc = Math.sqrt(b.mu / rr);
         F.body = b; F.r.set(rr * Math.cos(ang), 0, -rr * Math.sin(ang)); F.v.set(-vc * Math.sin(ang), 0, -vc * Math.cos(ang));

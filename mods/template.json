@@ -1,0 +1,30 @@
+{
+  "id": "my-first-mod",
+  "name": "My First Mod",
+  "version": "0.1",
+  "author": "You",
+  "api": 1,
+  "description": "Copy this file, change the id and name, and edit the parts below.",
+  "parts": {
+    "my_tank": {
+      "name": "My Tank",
+      "cat": "Tanks",
+      "h": 2.0,
+      "r": 0.625,
+      "mass": 1.2,
+      "dry": 0.14,
+      "desc": "A tank I made",
+      "mesh": {
+        "shape": "tank",
+        "color": "#88ccff",
+        "accent": "#224466"
+      }
+    }
+  },
+  "planets": [],
+  "crafts": [],
+  "tips": [
+    "Loading my first mod…"
+  ],
+  "script": "// optional: remove this line if you don't need code\napi.onFlightStart(f => api.toast('Hello from ' + api.mod.name + '! Flying ' + (f ? f.craft : '?'), 2500));\n"
+}

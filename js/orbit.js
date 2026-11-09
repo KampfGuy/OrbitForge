@@ -31,6 +31,20 @@ export const LUMO = mkBody({ name: 'Lumo', radius: 210000, mu: 7.0e10, parent: H
 export const PIP = mkBody({ name: 'Pip', radius: 65000, mu: 2.0e9, parent: HOME,
   orbit: { a: 45000000, inc: 6 * Math.PI / 180, lan: 1.3, phase: 0.9 }, rotPeriod: 41000, atm: null, kind: 'pip', color: 0xa9d8c4 });
 
+// mods: add a moon (or a moon of a moon). Units: metres, seconds, degrees for angles.
+export function registerBody(d) {
+  const name = String(d.name || '').trim();
+  if (!/^[\w \-']{2,24}$/.test(name)) throw new Error('planet needs a short name');
+  if (BODIES.some(b => b.name.toLowerCase() === name.toLowerCase())) throw new Error('a world called ' + name + ' already exists');
+  const parent = BODIES.find(b => b.name === (d.parent || 'Kampa')); if (!parent) throw new Error('unknown parent ' + d.parent);
+  const radius = +d.radius; if (!(radius >= 5000 && radius <= 2e6)) throw new Error('radius must be 5 km - 2000 km (in metres)');
+  const mu = d.mu ? +d.mu : (+d.gravity || 1) * radius * radius; if (!(mu > 0)) throw new Error('bad gravity');
+  const o = d.orbit || {}, a = +o.a; if (!(a > parent.radius * 3)) throw new Error('orbit.a (metres) must be well outside ' + parent.name);
+  if (parent.soi && a > parent.soi * 0.7) throw new Error('orbit.a is outside ' + parent.name + "'s sphere of influence");
+  const atm = d.atm ? { height: +d.atm.height || 30000, scale: +d.atm.scale || 4000, rho0: +d.atm.rho0 || 0.5 } : null;
+  return mkBody({ name, radius, mu, parent, orbit: { a, inc: (+o.inc || 0) * Math.PI / 180, lan: (+o.lan || 0) * Math.PI / 180, phase: (+o.phase || 0) * Math.PI / 180 },
+    rotPeriod: +d.rotPeriod || 40000, atm, kind: 'custom', colors: d.colors || {}, color: d.colors && d.colors.mid ? d.colors.mid : '#999999', mod: d.mod || true, desc: d.desc || '' });
+}
 // moon state relative to its parent at time t
 export function moonState(b, t, outP, outV) {
   const o = b.orbit, th = o.phase + o.n * t, a = o.a;

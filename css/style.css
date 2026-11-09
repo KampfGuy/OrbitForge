@@ -195,3 +195,44 @@ body.portrait .nodepanel { top: auto; left: calc(6px + var(--sal)); right: calc(
 body.landscape .rotate { display: none; }
 body.portrait .saspop { grid-template-columns: repeat(4, 44px); gap: 4px; transform: translateX(calc(-50% - 22px)); }
 body.portrait .saspop .pm small { font-size: 7.5px; }
+/* ---- round 3: popovers, autopilot chip, precision, settings, mods ---- */
+.saspop .pm.w2 { grid-column: span 2; }
+.saspop .pm.gap { visibility: hidden; }
+.saspop .pm.ap.on { background: rgba(140,60,200,0.85); border-color: #d9a6ff; }
+.actpop { grid-template-columns: repeat(4, 54px); }
+.sascol .sb.act { font-size: 18px; letter-spacing: 1px; }
+.sb.sas.ap { background: rgba(140,60,200,0.85); border-color: #d9a6ff; }
+.apchip { position: absolute; left: 50%; transform: translateX(-50%); top: calc(50px + var(--sat)); padding: 5px 10px; border-radius: 10px; font-size: 11.5px; white-space: nowrap; max-width: calc(100vw - 360px); overflow: hidden; text-overflow: ellipsis; border: 1px solid rgba(217,166,255,0.5); cursor: pointer; }
+.apchip b { color: #d9a6ff; margin-right: 4px; } .apchip i { font-style: normal; opacity: 0.6; margin-left: 6px; }
+.fui.hudopen .apchip { top: calc(150px + var(--sat)); }
+.fui:has(.apchip:not(.hidden)) .toast { top: calc(86px + var(--sat)); }
+body.portrait .apchip { top: calc(50px + var(--sat)); left: calc(116px + var(--sal)); right: calc(62px + var(--sar)); transform: none; max-width: none; text-align: center; font-size: 10.5px; }
+body.portrait .fui:has(.apchip:not(.hidden)) .toast { top: calc(178px + var(--sat)); }
+.hmain .heat { font-size: 11px; font-weight: 800; color: #ffcf7a; } .hmain .heat.warn { color: #ff6a4a; animation: blink 0.6s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+.finebadge, .trnbadge { position: absolute; left: 50%; top: -16px; transform: translateX(-50%); font-size: 9px; font-weight: 800; letter-spacing: 1px; padding: 1px 6px; border-radius: 6px; background: #d9a6ff; color: #1b0d26; display: none; pointer-events: none; white-space: nowrap; }
+.trnbadge { background: #7fe0ff; top: auto; bottom: -14px; }
+.fui.fine .finebadge { display: block; } .fui.fine .joy { border-color: #d9a6ff; }
+.fui.trn .trnbadge { display: block; } .fui.trn .joy { border-color: #7fe0ff; }
+body.portrait .sascol .sb.brk { display: none; }
+@media (max-height: 430px) { .sascol .sb { height: 34px; } .sascol { gap: 4px; margin-bottom: 4px; } }
+.sets { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.srow2 { display: flex; align-items: center; gap: 8px; }
+.srow2 > span { flex: 1; font-weight: 700; font-size: 13px; } .srow2 small { display: block; font-weight: 400; opacity: 0.7; font-size: 11px; }
+.srow2 button { min-width: 44px; height: 36px; border-radius: 9px; border: 1px solid var(--line); background: rgba(30,40,60,0.9); font-weight: 800; padding: 0 10px; }
+.srow2 button.on { background: rgba(31,157,85,0.9); }
+.srow2 b { min-width: 42px; text-align: center; }
+.small { font-size: 11px; opacity: 0.8; }
+.modwarn { background: rgba(160,60,20,0.35); border: 1px solid rgba(255,150,80,0.6); padding: 8px 10px; border-radius: 10px; font-size: 12px; text-align: left; }
+.modlist { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; text-align: left; }
+.modrow { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 10px; background: rgba(30,40,60,0.6); border: 1px solid var(--line); }
+.modrow > div { flex: 1; font-size: 12.5px; } .modrow small { opacity: 0.75; } .modrow .scr { color: #ffb14a; }
+.modrow button { min-width: 44px; height: 34px; border-radius: 8px; border: 1px solid var(--line); background: rgba(30,40,60,0.9); font-weight: 800; }
+.modrow button.on { background: rgba(31,157,85,0.9); }
+.modinst { display: flex; flex-direction: column; gap: 6px; }
+.filebtn { display: block; text-align: center; cursor: pointer; }
+.urlrow { display: flex; gap: 6px; } .urlin { flex: 1; min-width: 0; height: 36px; border-radius: 8px; border: 1px solid var(--line); background: rgba(10,15,26,0.8); color: #fff; padding: 0 8px; font-size: 13px; }
+.urlgo { min-width: 56px; border-radius: 8px; border: 1px solid var(--line); background: rgba(43,108,176,0.9); font-weight: 800; }
+.dcard h3 { margin: 10px 0 2px; font-size: 13px; letter-spacing: 1px; opacity: 0.85; text-align: left; }
+.modpanel { position: absolute; z-index: 3; pointer-events: none; }
+.cjson{width:100%;box-sizing:border-box;font:11px/1.35 ui-monospace,Menlo,monospace;background:#0b1220;color:#cfe3ff;border:1px solid #2a3a55;border-radius:8px;padding:6px;resize:vertical;max-height:30vh}
