@@ -382,7 +382,7 @@ export class Flight {
     if (alt < 5000) return 2; if (alt < 30000) return 4; if (alt < 120000) return 5; if (alt < 600000) return 6; return RAILS.length - 1;
   }
   thrusting() { if (this.throttle <= 0 && ![...this.prop.active].some(u => this.prop.by.get(u).def.srb && this.prop.fuel.get(u) > 0)) return false; const b = this.prop.burn(this.throttle, 0, 0); return b.F > 0; }
-  translating() { if (!this.rcsOn || !this.rcsBlocks.length) return false; const k = this.keys; return !!(k.KeyH || k.KeyN || k.KeyJ || k.KeyL || k.KeyI || k.KeyK || (this.trnMode && (Math.abs(this.joyV.x) + Math.abs(this.joyV.y) + Math.abs(this.rollIn || 0) > 0.02))); }
+  translating() { if (!this.rcsOn || !this.rcsBlocks.length) return false; const k = this.keys; return !!(k.KeyH || k.KeyN || k.KeyJ || k.KeyL || k.KeyI || k.KeyK || (this.trnMode && this.joyV && (Math.abs(this.joyV.x) + Math.abs(this.joyV.y) + Math.abs(this.rollIn || 0) > 0.02))); }
   canRails() {
     if (this.destroyed) return false;
     if (this.landed) return !this.thrusting();

@@ -6,7 +6,7 @@ class Synth {
     if (!this.on) return;
     try {
       if (!this.ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; this.ctx = new AC(); this.build(); }
-      if (this.ctx.state === 'suspended') this.ctx.resume();
+      if (this.ctx.state === 'suspended') { const pr = this.ctx.resume(); if (pr && pr.catch) pr.catch(() => { }); }
     } catch (e) { this.ctx = null; }
   }
   setOn(on) { this.on = on; if (!on && this.ctx) this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05); if (on) { this.unlock(); if (this.ctx) this.master.gain.setTargetAtTime(CTRL.volume, this.ctx.currentTime, 0.05); } }
